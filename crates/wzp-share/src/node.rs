@@ -182,7 +182,7 @@ impl ShareNode {
             (None, Some(l)) => direct_candidates(l.local_addr()?, &inner.iroh),
             (None, None) => Vec::new(),
         };
-        let plan = plan_relay(&inner.cfg);
+        let plan = attach_guest_ticket(plan_relay(&inner.cfg)).await;
         if direct.is_empty() && plan.is_none() {
             return Err(ShareError::Failed(NO_RELAY.into()));
         }
@@ -374,7 +374,7 @@ pub(crate) fn plan_relay(cfg: &ShareConfig) -> Option<RelayPlan> {
     let room = wzp_files::random_room();
     match &cfg.relay_token {
         Some(token) => Some(RelayPlan {
-            guest_ticket: issue_guest_ticket(addr, token, &room),
+            guest_ticket: None, // filled in by attach_guest_ticket
             addr,
             room,
             host_auth: Some(token.clone()),
@@ -389,15 +389,26 @@ pub(crate) fn plan_relay(cfg: &ShareConfig) -> Option<RelayPlan> {
     }
 }
 
-/// Room-scoped, expiring ticket (HMAC, one `file-*` room, 2 participants)
-/// that lets a recipient without a relay token join our relayed transfer.
-///
-/// TODO(relay-tickets): wire to the wzp-files ticket API from
-/// feat/relay-throughput once it is on main. Until then no ticket is issued,
-/// so a token-protected relay only works for recipients that hold their own
-/// token for the same relay (see `run_incoming`).
-fn issue_guest_ticket(_relay: SocketAddr, _token: &str, _room: &str) -> Option<String> {
-    None
+/// Ask the token-protected relay for a room-scoped, expiring ticket (HMAC,
+/// one `file-*` room, 2 participants) so a recipient without a relay token
+/// can join our relayed transfer. Only the ticket goes in the invite, never
+/// the relay token. If the relay can't issue one (down, token refused), the
+/// relay fallback is dropped for this transfer and direct paths are used.
+async fn attach_guest_ticket(plan: Option<RelayPlan>) -> Option<RelayPlan> {
+    let mut plan = plan?;
+    let Some(token) = plan.host_auth.clone() else {
+        return Some(plan); // open relay (tests only)
+    };
+    match wzp_files::request_room_ticket(plan.addr, &plan.room, &token).await {
+        Ok(t) => {
+            plan.guest_ticket = Some(t.ticket);
+            Some(plan)
+        }
+        Err(e) => {
+            tracing::warn!(relay = %plan.addr, error = %e, "relay ticket request failed; relay fallback disabled for this transfer");
+            None
+        }
+    }
 }
 
 /// Build the invite. The relay token never goes in here, only the ticket.

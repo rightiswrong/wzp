@@ -9505,6 +9505,7 @@ dependencies = [
  "wzp-crypto",
  "wzp-files",
  "wzp-iroh",
+ "wzp-proto",
  "wzp-relay",
  "wzp-transport",
 ]

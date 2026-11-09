@@ -16,25 +16,49 @@ const T: Duration = Duration::from_secs(30);
 
 struct TestRelay {
     addr: SocketAddr,
+    #[allow(dead_code)]
+    rooms: Arc<wzp_relay::room::RoomManager>,
     _task: tokio::task::JoinHandle<()>,
 }
 
 async fn start_relay() -> TestRelay {
-    use wzp_relay::file_relay::{self, StreamRelayLimits};
+    start_relay_full(
+        wzp_relay::file_relay::StreamRelayLimits::default(),
+        Arc::new(wzp_relay::access::AccessControl::open([3u8; 32])),
+    )
+    .await
+}
+
+async fn start_relay_with_access(access: Arc<wzp_relay::access::AccessControl>) -> TestRelay {
+    start_relay_full(wzp_relay::file_relay::StreamRelayLimits::default(), access).await
+}
+
+/// Mirrors wzp-relay main.rs (access gate, handshake, rooms, splicer);
+/// copied from wzp-files' e2e tests, which are private to that crate.
+async fn start_relay_full(
+    limits: wzp_relay::file_relay::StreamRelayLimits,
+    access: Arc<wzp_relay::access::AccessControl>,
+) -> TestRelay {
+    use wzp_relay::file_relay;
     use wzp_relay::metrics::RelayMetrics;
     use wzp_relay::room::{self, RoomManager};
-
     let _ = rustls::crypto::ring::default_provider().install_default();
     let seed = [0x42u8; 32];
-    let (sc, _) = wzp_transport::server_config_from_seed(&seed);
+    // Same listener tuning as wzp-relay's main.rs (RelayConfig defaults).
+    let rc = wzp_relay::config::RelayConfig::default();
+    let (mut sc, _) = wzp_transport::server_config_from_seed(&seed);
+    sc.transport_config(Arc::new(rc.transport_config()));
     let ep = wzp_transport::create_endpoint("127.0.0.1:0".parse().unwrap(), Some(sc)).unwrap();
     let addr = ep.local_addr().unwrap();
     let rooms = Arc::new(RoomManager::new());
     let metrics = Arc::new(RelayMetrics::new());
+    let rm = rooms.clone();
     let task = tokio::spawn(async move {
         while let Some(incoming) = ep.accept().await {
-            let rm = rooms.clone();
+            let rm = rm.clone();
             let metrics = metrics.clone();
+            let limits = limits.clone();
+            let access = access.clone();
             tokio::spawn(async move {
                 let Ok(conn) = incoming.await else { return };
                 let room_name = conn
@@ -43,9 +67,47 @@ async fn start_relay() -> TestRelay {
                     .and_then(|hd| hd.server_name.clone())
                     .unwrap_or_else(|| "default".into());
                 let addr = conn.remote_address();
+                if file_relay::room_is_file_session(&room_name) {
+                    file_relay::tune_file_connection(&conn, &limits);
+                }
                 let transport = Arc::new(wzp_transport::QuinnTransport::new(conn));
+                if room_name == "_signal" {
+                    // Direct-call signaling: only the auth gate matters here.
+                    if wzp_relay::access::gate_signal_connection(&transport, &access, None)
+                        .await
+                        .is_ok()
+                    {
+                        let _ = wzp_proto::MediaTransport::send_signal(
+                            &*transport,
+                            &wzp_proto::SignalMessage::Pong {
+                                version: 1,
+                                timestamp_ms: 0,
+                            },
+                        )
+                        .await;
+                        transport.connection().closed().await;
+                    }
+                    return;
+                }
+                let offer = match wzp_relay::access::gate_room_connection(
+                    &transport, &room_name, &access, None,
+                )
+                .await
+                {
+                    wzp_relay::access::Gate::Join { offer, .. } => offer,
+                    wzp_relay::access::Gate::TicketIssued => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        return;
+                    }
+                    wzp_relay::access::Gate::Rejected(_) => return,
+                };
                 let Ok((_s, _p, fp, alias)) =
-                    wzp_relay::handshake::accept_handshake(&*transport, &seed).await
+                    wzp_relay::handshake::accept_handshake_with_offer(
+                        &*transport,
+                        &seed,
+                        offer,
+                    )
+                    .await
                 else {
                     return;
                 };
@@ -53,14 +115,15 @@ async fn start_relay() -> TestRelay {
                     transport.close_now();
                     return;
                 }
-                let Ok((pid, update, senders, _)) = rm.join(
+                let (pid, update, senders, _) = match rm.join(
                     &room_name,
                     addr,
                     room::ParticipantSender::Quic(transport.clone()),
                     Some(&fp),
                     alias.as_deref(),
-                ) else {
-                    return;
+                ) {
+                    Ok(v) => v,
+                    Err(_) => return,
                 };
                 room::broadcast_signal(&senders, &update).await;
                 let media = tokio::spawn(room::run_participant(
@@ -87,7 +150,7 @@ async fn start_relay() -> TestRelay {
                     room_name.clone(),
                     pid,
                     transport.clone(),
-                    StreamRelayLimits::default(),
+                    limits,
                 ));
                 transport.connection().closed().await;
                 media.abort();
@@ -99,7 +162,11 @@ async fn start_relay() -> TestRelay {
             });
         }
     });
-    TestRelay { addr, _task: task }
+    TestRelay {
+        addr,
+        rooms,
+        _task: task,
+    }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
@@ -497,4 +564,52 @@ fn relay_token_never_in_invite_or_debug() {
     // Without a token (and without the test hook) the relay is not used.
     c.relay_token = None;
     assert!(crate::node::plan_relay(&c).is_none());
+}
+
+/// Token-protected relay: the sender holds the relay token, the receiver
+/// has none. The invite carries only a room ticket, which is enough for
+/// the receiver to join the relayed transfer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_protected_relay_uses_room_ticket() {
+    let access = Arc::new(
+        wzp_relay::access::AccessControl::new(
+            &["s3cret-relay-token".to_string()],
+            None,
+            [9u8; 32],
+            Duration::from_secs(600),
+        )
+        .unwrap(),
+    );
+    let relay = start_relay_with_access(access).await;
+    let p = pair(
+        11,
+        12,
+        true,
+        |c| {
+            c.relay = Some(relay.addr);
+            c.relay_token = Some("s3cret-relay-token".into());
+            c.test_direct_override = Some(vec!["127.0.0.1:9".parse().unwrap()]);
+        },
+        |c| c.auto_accept = true, // no relay, no token on the receiver
+    )
+    .await;
+    let src_dir = tempfile::tempdir().unwrap();
+    let src = random_file(src_dir.path(), "ticket.bin", 512 * 1024 + 3);
+    let mut ev_b = p.b.events();
+
+    let h = p.a.send_file(p.b.id(), &src).await.unwrap();
+    let offer = wait_for(&mut ev_b, incoming_offer).await;
+    assert_eq!(offer.relayed, Some(true), "relay path expected");
+    h.wait().await.unwrap();
+    let done = wait_for(&mut ev_b, |e| match e {
+        ShareEvent::TransferCompleted { transfer } => Some(transfer.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        std::fs::read(done.path.unwrap()).unwrap(),
+        std::fs::read(&src).unwrap()
+    );
+    p.a.shutdown().await;
+    p.b.shutdown().await;
 }

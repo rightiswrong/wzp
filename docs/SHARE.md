@@ -109,14 +109,14 @@ TransferCompleted ◀──── FileComplete ───────────
   redacts it and the iroh relay token) and never goes into an envelope or a
   `FileSessionInvite`. A unit test checks this.
 * The invite's `relay.auth_token` holds only a **room-scoped guest ticket**
-  (HMAC, one `file-*` room, 2 participants, expiring). The relay side of this
-  is being added in wzp-files/wzp-relay on `feat/relay-throughput`.
-  **TODO(relay-tickets):** `node::issue_guest_ticket` currently returns
-  `None`. Once that API is on main it should mint the ticket there, and a
-  test with a token-checking in-process relay should be added.
-* Until then a receiver joins a token-protected relay only if the invite
-  points at the receiver's *own* configured relay and the receiver has its
-  own `relay_token`.
+  (HMAC, one `file-*` room, 2 participants, expiring — `--ticket-ttl`,
+  default 10 min to join). The host fetches it with
+  `wzp_files::request_room_ticket` before sending the invite. If the relay
+  can't issue one (down, token refused), the relay fallback is dropped for
+  that transfer and only direct candidates are offered. A receiver needs no
+  relay token of its own. Covered by `token_protected_relay_uses_room_ticket`.
+* A receiver whose own configured relay matches an invite without a ticket
+  still authenticates with its own `relay_token` (older senders).
 * No `relay_token` means **no relay fallback**: the invite carries direct
   candidates only. If they fail, the transfer fails on both sides with
   "direct connection failed and no relay configured/authorized". If there

@@ -32,5 +32,6 @@ clap = { version = "4", features = ["derive", "env"] }
 tempfile = "3"
 wzp-relay = { path = "../wzp-relay" }
 wzp-transport = { workspace = true }
+wzp-proto = { workspace = true }
 quinn = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
