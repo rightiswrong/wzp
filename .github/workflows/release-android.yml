@@ -273,7 +273,7 @@ jobs:
           echo "--- merged manifest (aapt2 dump xmltree)"
           "$BT/aapt2" dump xmltree --file AndroidManifest.xml "$APK" | tee "$RUNNER_TEMP/manifest.txt"
           echo "--- launcher icons"
-          unzip -l "$APK" | grep -E 'res/.*(ic_launcher|mipmap)' || true
+          "$BT/aapt2" dump badging "$APK" | grep -E '^application-icon|^application:' || true
           W="$RUNNER_TEMP/apkcheck"; rm -rf "$W"; mkdir -p "$W"
           unzip -q -o "$APK" 'classes*.dex' 'lib/arm64-v8a/libwzp_desktop_lib.so' -d "$W"
           for d in "$W"/classes*.dex; do "$BT/dexdump" "$d"; done 2>/dev/null \

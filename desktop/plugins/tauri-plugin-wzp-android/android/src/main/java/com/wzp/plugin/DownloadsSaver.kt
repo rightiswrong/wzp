@@ -91,10 +91,10 @@ internal object DownloadsSaver {
     return relPath + finalName
   }
 
-  /** API 26-28. [public] = WRITE_EXTERNAL_STORAGE granted. Returns a display location. */
-  fun saveLegacy(context: Context, src: File, rawName: String, mime: String?, public: Boolean): String {
+  /** API 26-28. [publicDir] = WRITE_EXTERNAL_STORAGE granted. Returns a display location. */
+  fun saveLegacy(context: Context, src: File, rawName: String, mime: String?, publicDir: Boolean): String {
     requireSource(src)
-    val base: File = if (public) {
+    val base: File = if (publicDir) {
       @Suppress("DEPRECATION")
       Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     } else {
@@ -119,6 +119,6 @@ internal object DownloadsSaver {
       throw e
     }
     MediaScannerConnection.scanFile(context, arrayOf(dest.absolutePath), arrayOf(mimeFor(dest.name, mime)), null)
-    return if (public) "${Environment.DIRECTORY_DOWNLOADS}/$SUBDIR/${dest.name}" else dest.absolutePath
+    return if (publicDir) "${Environment.DIRECTORY_DOWNLOADS}/$SUBDIR/${dest.name}" else dest.absolutePath
   }
 }
