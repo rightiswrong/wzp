@@ -7,6 +7,7 @@
 //! It operates on FEC-protected packets, managing loss recovery and adaptive
 //! quality transitions.
 
+pub mod access;
 pub mod audio_scorer;
 pub mod auth;
 pub mod call_registry;

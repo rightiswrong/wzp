@@ -34,6 +34,8 @@ pub struct WsState {
     pub room_mgr: Arc<RoomManager>,
     pub session_mgr: Arc<Mutex<SessionManager>>,
     pub auth_url: Option<String>,
+    /// Relay access tokens / room tickets (None = open).
+    pub access: Option<Arc<crate::access::AccessControl>>,
     pub metrics: Arc<RelayMetrics>,
     pub presence: Arc<Mutex<PresenceRegistry>>,
 }
@@ -69,21 +71,42 @@ async fn ws_upgrade_handler(
 async fn handle_ws_connection(socket: WebSocket, room: String, state: WsState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // 1. Auth: if auth_url is set, first message must be {"type":"auth","token":"..."}
-    let fingerprint: Option<String> = if let Some(ref auth_url) = state.auth_url {
+    // 1. Auth: if access tokens or auth_url are configured, first message
+    //    must be {"type":"auth","token":"..."} (token, room ticket, or a
+    //    token accepted by auth_url).
+    let tokens_on = state.access.as_ref().is_some_and(|a| a.enabled());
+    let fingerprint: Option<String> = if tokens_on || state.auth_url.is_some() {
         match ws_rx.next().await {
             Some(Ok(Message::Text(text))) => {
                 match serde_json::from_str::<serde_json::Value>(&text) {
                     Ok(parsed) if parsed["type"] == "auth" => {
                         if let Some(token) = parsed["token"].as_str() {
-                            match auth::validate_token(auth_url, token).await {
-                                Ok(client) => {
+                            let checked = match &state.access {
+                                Some(a) => {
+                                    crate::access::check_ws_token(
+                                        a,
+                                        state.auth_url.as_deref(),
+                                        &room,
+                                        token,
+                                    )
+                                    .await
+                                }
+                                None => match state.auth_url.as_deref() {
+                                    Some(url) => auth::validate_token(url, token)
+                                        .await
+                                        .ok()
+                                        .map(|c| Some(c.fingerprint)),
+                                    None => None,
+                                },
+                            };
+                            match checked.ok_or("unauthorized") {
+                                Ok(fp) => {
                                     state.metrics.auth_attempts.with_label_values(&["ok"]).inc();
-                                    info!(fingerprint = %client.fingerprint, "WS authenticated");
+                                    info!(fingerprint = ?fp, "WS authenticated");
                                     let _ = ws_tx
                                         .send(Message::Text(r#"{"type":"auth_ok"}"#.into()))
                                         .await;
-                                    Some(client.fingerprint)
+                                    fp
                                 }
                                 Err(e) => {
                                     state

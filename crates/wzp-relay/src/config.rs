@@ -122,6 +122,14 @@ pub struct RelayConfig {
     /// File transfer: max bytes per spliced stream (≈ max file size).
     /// Default 10 GiB + 128 MiB framing headroom.
     pub file_stream_byte_cap: u64,
+    /// Relay access tokens (`--access-token`). When any token (or a token
+    /// file) is configured, every client must authenticate.
+    pub access_tokens: Vec<String>,
+    /// Token file (`--access-tokens`): one per line, `#` comments; reloaded
+    /// on SIGHUP and on mtime change.
+    pub access_tokens_file: Option<String>,
+    /// Lifetime of room tickets (seconds to join). Default 600.
+    pub ticket_ttl_secs: u64,
 }
 
 impl RelayConfig {
@@ -174,6 +182,9 @@ impl Default for RelayConfig {
             file_send_window: 16 * 1024 * 1024,
             stream_receive_window: 16 * 1024 * 1024,
             congestion: "bbr".to_string(),
+            access_tokens: Vec::new(),
+            access_tokens_file: None,
+            ticket_ttl_secs: 600,
             file_session_byte_cap: 64 * 1024 * 1024 * 1024,
             file_stream_byte_cap: 10 * 1024 * 1024 * 1024 + 128 * 1024 * 1024,
         }

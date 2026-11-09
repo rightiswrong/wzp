@@ -135,7 +135,9 @@ async fn quick_relay_throughput_with_rtt() {
     let mibs = relay_throughput(16 << 20, Duration::from_millis(50)).await;
     // Pre-tuning this was ~2 MiB/s (VoIP flow-control windows). Keep the
     // bound loose: CI machines are slow and shared.
-    assert!(mibs > 4.0, "{mibs:.1} MiB/s");
+    // Debug builds are CPU-bound; the bound is meaningful in --release (CI).
+    let min = if cfg!(debug_assertions) { 1.0 } else { 4.0 };
+    assert!(mibs > min, "{mibs:.1} MiB/s");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

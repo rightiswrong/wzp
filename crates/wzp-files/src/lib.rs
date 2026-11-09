@@ -45,9 +45,9 @@ use serde::{Deserialize, Serialize};
 pub use endpoint::{FileEndpoint, IncomingOffer};
 pub use session::{
     ConnectOptions, DIRECT_CONTEXT, DirectListener, FILE_ROOM_PREFIX, FileSessionInvite,
-    RelayRendezvous, Session, bulk_transport_config, connect_direct, connect_via_relay,
-    connect_via_relay_with, fingerprint_of_seed, host_invite, join_invite, listen_direct,
-    random_room, relay_room_name,
+    RelayRendezvous, RoomTicketInfo, Session, bulk_transport_config, connect_direct,
+    connect_via_relay, connect_via_relay_with, create_invite, fingerprint_of_seed, host_invite,
+    join_invite, listen_direct, random_room, relay_room_name, request_room_ticket,
 };
 pub use wzp_crypto::Fingerprint;
 pub use wzp_proto::sanitize_file_name;

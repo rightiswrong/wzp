@@ -1304,6 +1304,27 @@ pub enum SignalMessage {
         transfer_id: [u8; 16],
         chunks: Vec<u32>,
     },
+
+    // ── Relay access tickets (see docs/ADMINISTRATION.md) ───────────────
+    /// First signal on a connection whose SNI is a `file-*` room: ask the
+    /// relay for a room-scoped ticket, proving access with a relay token.
+    /// The relay answers with [`SignalMessage::RoomTicket`] (or a Hangup)
+    /// and closes the connection; it does not join the room.
+    RoomTicketRequest {
+        #[serde(default = "default_signal_version")]
+        version: u8,
+        room: String,
+        token: String,
+    },
+    /// Room-scoped admission ticket. Present it as `AuthToken.token` to
+    /// join exactly `room` (max 2 participants) until `expires_unix`.
+    RoomTicket {
+        #[serde(default = "default_signal_version")]
+        version: u8,
+        room: String,
+        ticket: String,
+        expires_unix: u64,
+    },
 }
 
 /// Maximum length (in bytes, UTF-8) of a sanitized file name.

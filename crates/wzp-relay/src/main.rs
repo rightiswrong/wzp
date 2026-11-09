@@ -56,6 +56,20 @@ struct Args {
     #[arg(long)]
     auth_url: Option<String>,
 
+    /// Relay access token (repeatable). When any token is configured every
+    /// client must authenticate before joining rooms.
+    #[arg(long = "access-token")]
+    access_token: Vec<String>,
+
+    /// File with relay access tokens (one per line, `#` comments),
+    /// reloaded on SIGHUP and when the file changes.
+    #[arg(long = "access-tokens")]
+    access_tokens: Option<String>,
+
+    /// Room-ticket lifetime in seconds (time allowed to join). Default 600.
+    #[arg(long)]
+    ticket_ttl: Option<u64>,
+
     /// Prometheus metrics HTTP port (e.g., 9090). Disabled if not set.
     #[arg(long)]
     metrics_port: Option<u16>,
@@ -145,6 +159,13 @@ fn parse_args() -> CliResult {
     }
     if let Some(url) = args.auth_url {
         config.auth_url = Some(url);
+    }
+    config.access_tokens.extend(args.access_token);
+    if let Some(f) = args.access_tokens {
+        config.access_tokens_file = Some(f);
+    }
+    if let Some(t) = args.ticket_ttl {
+        config.ticket_ttl_secs = t;
     }
     if let Some(port) = args.metrics_port {
         config.metrics_port = Some(port);
@@ -358,6 +379,32 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let relay_fp = relay_seed.derive_identity().public_identity().fingerprint;
+
+    // Access control: tokens + room tickets. The ticket secret lives next
+    // to the relay identity.
+    let access = {
+        let id_dir = match identity_path {
+            Some(ref p) => std::path::PathBuf::from(p)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+            None => dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".wzp"),
+        };
+        let secret = wzp_relay::access::load_or_create_secret(&id_dir.join("relay-ticket-secret"))?;
+        let ac = std::sync::Arc::new(wzp_relay::access::AccessControl::new(
+            &config.access_tokens,
+            config.access_tokens_file.as_ref().map(std::path::PathBuf::from),
+            secret,
+            Duration::from_secs(config.ticket_ttl_secs),
+        )?);
+        ac.clone().spawn_reloader();
+        if ac.enabled() {
+            info!("access tokens required for all client connections");
+        }
+        ac
+    };
     info!(addr = %config.listen_addr, fingerprint = %relay_fp, "WarzonePhone relay starting");
 
     let (mut server_config, cert_der) = wzp_transport::server_config_from_seed(&relay_seed.0);
@@ -519,6 +566,7 @@ async fn main() -> anyhow::Result<()> {
             room_mgr: room_mgr.clone(),
             session_mgr: session_mgr.clone(),
             auth_url: config.auth_url.clone(),
+            access: Some(access.clone()),
             metrics: metrics.clone(),
             presence: presence.clone(),
         };
@@ -798,6 +846,7 @@ async fn main() -> anyhow::Result<()> {
         let room_mgr = room_mgr.clone();
         let session_mgr = session_mgr.clone();
         let auth_url = config.auth_url.clone();
+        let access = access.clone();
         let relay_seed_bytes = relay_seed.0;
         let metrics = metrics.clone();
         let trunking_enabled = config.trunking_enabled;
@@ -1017,25 +1066,19 @@ async fn main() -> anyhow::Result<()> {
             if room_name == "_signal" {
                 info!(%addr, "signal connection");
 
-                // Optional auth
-                let auth_fp: Option<String> = if let Some(ref url) = auth_url {
-                    match transport.recv_signal().await {
-                        Ok(Some(SignalMessage::AuthToken { token, .. })) => {
-                            match wzp_relay::auth::validate_token(url, &token).await {
-                                Ok(client) => Some(client.fingerprint),
-                                Err(e) => {
-                                    error!(%addr, "signal auth failed: {e}");
-                                    return;
-                                }
-                            }
-                        }
-                        _ => {
-                            warn!(%addr, "signal: expected AuthToken");
-                            return;
-                        }
+                // Auth: access tokens and/or --auth-url (tickets not accepted here)
+                let auth_fp: Option<String> = match wzp_relay::access::gate_signal_connection(
+                    &transport,
+                    &access,
+                    auth_url.as_deref(),
+                )
+                .await
+                {
+                    Ok(fp) => fp,
+                    Err(e) => {
+                        warn!(%addr, "signal auth refused: {e}");
+                        return;
                     }
-                } else {
-                    None
                 };
 
                 // Wait for RegisterPresence
@@ -1773,54 +1816,53 @@ async fn main() -> anyhow::Result<()> {
                 return;
             }
 
-            // Auth check: if --auth-url is set, expect first signal message to be a token
-            // Auth: if --auth-url is set, expect AuthToken as first signal
-            let authenticated_fp: Option<String> = if let Some(ref url) = auth_url {
-                info!(%addr, "waiting for auth token...");
-                match transport.recv_signal().await {
-                    Ok(Some(wzp_proto::SignalMessage::AuthToken { token, .. })) => {
-                        match wzp_relay::auth::validate_token(url, &token).await {
-                            Ok(client) => {
-                                metrics.auth_attempts.with_label_values(&["ok"]).inc();
-                                info!(
-                                    %addr,
-                                    fingerprint = %client.fingerprint,
-                                    alias = ?client.alias,
-                                    "authenticated"
-                                );
-                                Some(client.fingerprint)
+            // Auth: access tokens / room tickets / --auth-url, then the
+            // crypto handshake (verify client identity + negotiate profile).
+            let (authenticated_fp, admission, first_offer) =
+                match wzp_relay::access::gate_room_connection(
+                    &transport,
+                    &room_name,
+                    &access,
+                    auth_url.as_deref(),
+                )
+                .await
+                {
+                    wzp_relay::access::Gate::Join { admission, offer } => {
+                        let fp = match &admission {
+                            wzp_relay::access::Admission::Full { http_fingerprint } => {
+                                http_fingerprint.clone()
                             }
-                            Err(e) => {
-                                metrics.auth_attempts.with_label_values(&["fail"]).inc();
-                                error!(%addr, "auth failed: {e}");
-                                close_transport(&*transport, "cleanup").await;
-                                return;
-                            }
+                            wzp_relay::access::Admission::Ticket => None,
+                        };
+                        if access.enabled() || auth_url.is_some() {
+                            metrics.auth_attempts.with_label_values(&["ok"]).inc();
                         }
+                        (fp, admission, offer)
                     }
-                    Ok(Some(_)) => {
-                        error!(%addr, "expected AuthToken as first signal, got something else");
-                        close_transport(&*transport, "cleanup").await;
+                    wzp_relay::access::Gate::TicketIssued => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        close_transport(&*transport, "ticket issued").await;
                         return;
                     }
-                    Ok(None) => {
-                        error!(%addr, "connection closed before auth");
+                    wzp_relay::access::Gate::Rejected(why) => {
+                        metrics.auth_attempts.with_label_values(&["fail"]).inc();
+                        warn!(%addr, room = %room_name, "client refused: {why}");
                         return;
                     }
-                    Err(e) => {
-                        error!(%addr, "signal recv error during auth: {e}");
-                        close_transport(&*transport, "cleanup").await;
-                        return;
-                    }
-                }
-            } else {
-                None
-            };
+                };
+            if admission == wzp_relay::access::Admission::Ticket {
+                info!(%addr, room = %room_name, "admitted with room ticket");
+            }
 
-            // Crypto handshake: verify client identity + negotiate quality profile
             let handshake_start = std::time::Instant::now();
             let (_crypto_session, _chosen_profile, caller_fp, caller_alias) =
-                match wzp_relay::handshake::accept_handshake(&*transport, &relay_seed_bytes).await {
+                match wzp_relay::handshake::accept_handshake_with_offer(
+                    &*transport,
+                    &relay_seed_bytes,
+                    first_offer,
+                )
+                .await
+                {
                     Ok(result) => {
                         let elapsed = handshake_start.elapsed().as_secs_f64();
                         metrics.handshake_duration.observe(elapsed);
