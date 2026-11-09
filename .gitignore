@@ -34,3 +34,7 @@ node_modules/
 # Taskmaster (local workflow tool)
 .taskmaster/
 .env.example
+
+# Build outputs belong in GitHub Releases, not the repo
+/*.apk
+/*.aab
