@@ -474,9 +474,8 @@ impl ShareState {
                 Err(_) => warning = Some(format!("relay {}: DNS timeout", s.relay_addr)),
             }
             if cfg.relay.is_some() && s.relay_token.is_none() {
-                warning = Some(
-                    "WZP relay set but no relay token: files go direct only".to_string(),
-                );
+                warning =
+                    Some("WZP relay set but no relay token: files go direct only".to_string());
             }
         }
         (cfg, warning)
@@ -596,12 +595,20 @@ impl ShareState {
                     contact: contact.clone(),
                 };
                 let mut v = self.requests.lock().unwrap();
-                v.retain(|r| r.id != req.id || (r.contact.is_none() && req.contact.is_some()));
+                let known = v.iter().any(|r| r.id == req.id);
+                // A later request carrying a contact string (Hello) upgrades
+                // an earlier bare one.
+                v.retain(|r| !(r.id == req.id && r.contact.is_none() && req.contact.is_some()));
                 if !v.iter().any(|r| r.id == req.id) {
                     let who = req.name.clone().unwrap_or_else(|| req.fingerprint.clone());
                     v.push(req);
                     drop(v);
-                    self.notify("Contact request", &format!("{who} wants to share files with you"));
+                    if !known {
+                        self.notify(
+                            "Contact request",
+                            &format!("{who} wants to share files with you"),
+                        );
+                    }
                 }
             }
             ShareEvent::TransferOffered { transfer: t }
@@ -620,13 +627,21 @@ impl ShareState {
                 } else {
                     self.notify(
                         "Incoming file",
-                        &format!("{} wants to send {} ({})", t.contact_name, t.name, fmt_size(t.size)),
+                        &format!(
+                            "{} wants to send {} ({})",
+                            t.contact_name,
+                            t.name,
+                            fmt_size(t.size)
+                        ),
                     );
                 }
             }
             ShareEvent::TransferCompleted { transfer: t } => {
                 if t.direction == Direction::Incoming {
-                    self.notify("File received", &format!("{} from {}", t.name, t.contact_name));
+                    self.notify(
+                        "File received",
+                        &format!("{} from {}", t.name, t.contact_name),
+                    );
                     if platform::IS_ANDROID
                         && let Some(p) = &t.path
                     {
@@ -950,7 +965,11 @@ pub async fn clear_finished(state: St<'_>) -> Result<usize, String> {
     let node = state.node().await?;
     let n = node.remove_finished();
     let live: Vec<ShareId> = node.transfers().iter().map(|t| t.id).collect();
-    state.saved.lock().unwrap().retain(|id, _| live.contains(id));
+    state
+        .saved
+        .lock()
+        .unwrap()
+        .retain(|id, _| live.contains(id));
     Ok(n)
 }
 
@@ -960,10 +979,7 @@ pub async fn get_settings(state: St<'_>) -> Result<SettingsView, String> {
 }
 
 #[tauri::command]
-pub async fn set_settings(
-    state: St<'_>,
-    update: SettingsUpdate,
-) -> Result<SettingsView, String> {
+pub async fn set_settings(state: St<'_>, update: SettingsUpdate) -> Result<SettingsView, String> {
     let restart = {
         let mut s = state.settings.lock().unwrap();
         let mut next = s.clone();
@@ -1148,14 +1164,26 @@ mod tests {
     #[test]
     fn validation() {
         let mut s = Settings::default();
-        for bad in ["relay", "relay:", "relay:0", ":4433", "relay:99999", "a b:1"] {
+        for bad in [
+            "relay",
+            "relay:",
+            "relay:0",
+            ":4433",
+            "relay:99999",
+            "a b:1",
+        ] {
             let u = SettingsUpdate {
                 relay_addr: Some(bad.into()),
                 ..Default::default()
             };
             assert!(s.apply(u).is_err(), "{bad} should be rejected");
         }
-        for good in ["", "relay.example.org:4433", "203.0.113.1:4433", "[2001:db8::1]:4433"] {
+        for good in [
+            "",
+            "relay.example.org:4433",
+            "203.0.113.1:4433",
+            "[2001:db8::1]:4433",
+        ] {
             let u = SettingsUpdate {
                 relay_addr: Some(good.into()),
                 ..Default::default()
