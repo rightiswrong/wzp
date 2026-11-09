@@ -14,7 +14,7 @@
 //! See docs/SHARE.md for the wzp-share flow.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -322,6 +322,9 @@ pub struct ShareState {
     status: Mutex<NodeStatus>,
     requests: Mutex<Vec<ContactRequestView>>,
     saved: Mutex<HashMap<ShareId, String>>,
+    /// Android: picked / shared files copied into their own cache dirs by
+    /// the bridge; the dir is removed once the file's transfer ends.
+    picked: Mutex<HashSet<PathBuf>>,
     service_running: AtomicBool,
     service_updated: Mutex<Instant>,
 }
@@ -386,9 +389,28 @@ impl ShareState {
             }),
             requests: Mutex::new(Vec::new()),
             saved: Mutex::new(HashMap::new()),
+            picked: Mutex::new(HashSet::new()),
             service_running: AtomicBool::new(false),
             service_updated: Mutex::new(Instant::now() - Duration::from_secs(10)),
         })
+    }
+
+    fn track_picked(&self, files: &[platform::PickedFile]) {
+        if platform::IS_ANDROID {
+            let mut p = self.picked.lock().unwrap();
+            p.extend(files.iter().map(|f| f.path.clone()));
+        }
+    }
+
+    /// Delete the bridge's cache copy (its own parent dir) of a picked file.
+    fn release_picked(&self, path: &Path) {
+        if !self.picked.lock().unwrap().remove(path) {
+            return;
+        }
+        let target = path.parent().unwrap_or(path);
+        if let Err(e) = std::fs::remove_dir_all(target) {
+            tracing::debug!("remove picked copy {}: {e}", target.display());
+        }
     }
 
     fn settings(&self) -> Settings {
@@ -659,6 +681,15 @@ impl ShareState {
             }
             _ => {}
         }
+        if let ShareEvent::TransferCompleted { transfer: t }
+        | ShareEvent::TransferRejected { transfer: t }
+        | ShareEvent::TransferFailed { transfer: t }
+        | ShareEvent::TransferCancelled { transfer: t, .. } = ev
+            && t.direction == Direction::Outgoing
+            && let Some(p) = &t.path
+        {
+            self.release_picked(p);
+        }
         if matches!(
             ev,
             ShareEvent::TransferOffered { .. }
@@ -905,7 +936,10 @@ pub async fn send_files(
                 error: None,
             },
             Err(e) => SendResult {
-                path: p,
+                path: {
+                    state.release_picked(Path::new(&p));
+                    p
+                },
                 id: None,
                 error: Some(e.to_string()),
             },
@@ -997,8 +1031,23 @@ pub async fn set_settings(state: St<'_>, update: SettingsUpdate) -> Result<Setti
 
 /// Native file picker (desktop dialog, Android SAF through the bridge).
 #[tauri::command]
-pub async fn pick_files(app: tauri::AppHandle) -> Result<Vec<platform::PickedFile>, String> {
-    platform::pick_files(&app).await
+pub async fn pick_files(
+    state: St<'_>,
+    app: tauri::AppHandle,
+) -> Result<Vec<platform::PickedFile>, String> {
+    let files = platform::pick_files(&app).await?;
+    state.track_picked(&files);
+    Ok(files)
+}
+
+/// Picked / shared files the user decided not to send (Android: frees the
+/// cache copies).
+#[tauri::command]
+pub async fn discard_picked(state: St<'_>, paths: Vec<String>) -> Result<(), String> {
+    for p in paths {
+        state.release_picked(Path::new(&p));
+    }
+    Ok(())
 }
 
 /// Desktop: choose the download folder. `None` if cancelled.
@@ -1011,8 +1060,14 @@ pub async fn pick_download_folder(app: tauri::AppHandle) -> Result<Option<String
 
 /// Android: files shared to the app ("Share to WarzonePhone").
 #[tauri::command]
-pub async fn take_shared_files(app: tauri::AppHandle) -> Result<Vec<platform::PickedFile>, String> {
-    platform::take_shared_files(&app)
+pub async fn take_shared_files(
+    state: St<'_>,
+    app: tauri::AppHandle,
+) -> Result<Vec<platform::PickedFile>, String> {
+    // Async command: runs off the Android main thread, as the bridge requires.
+    let files = platform::take_shared_files(&app)?;
+    state.track_picked(&files);
+    Ok(files)
 }
 
 #[tauri::command]

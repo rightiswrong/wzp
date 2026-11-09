@@ -2,9 +2,7 @@
 //! this module so the bridge to `tauri-plugin-wzp-android` is wired in one
 //! place (see `notes/android-bridge.md` / the plugin's `WzpAndroidExt`).
 //!
-//! Until the plugin lands on main, the Android functions are stubs that
-//! return errors / do nothing, so the Android build keeps compiling. On
-//! desktop targets nothing here touches the plugin.
+//! On desktop targets nothing here touches the plugin.
 
 #![allow(dead_code)]
 
@@ -54,64 +52,82 @@ pub fn name() -> &'static str {
 
 // ─── Android ─────────────────────────────────────────────────────────
 //
-// Stubs until `tauri-plugin-wzp-android` exists on main. Wiring it up:
-//   1. add the plugin crate under `[target.'cfg(target_os = "android")'.dependencies]`;
-//   2. register it in `register_plugins` below;
-//   3. replace each stub body with `app.wzp_android().<same name>(..)`.
+// Thin wrappers over `tauri-plugin-wzp-android` (registered in lib.rs).
+// The sync methods must not run on the Android main thread (they return
+// `Error::MainThread`): call them only from async commands / tokio tasks.
 
 #[cfg(target_os = "android")]
 mod imp {
     use super::*;
+    use tauri_plugin_wzp_android::WzpAndroidExt;
 
-    const NOT_YET: &str = "Android bridge plugin not available in this build";
-
-    pub fn register_plugins<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
-        b
+    fn conv(f: tauri_plugin_wzp_android::PickedFile) -> PickedFile {
+        PickedFile {
+            path: f.path,
+            name: f.name,
+            size: f.size,
+            mime: f.mime,
+        }
     }
 
-    pub async fn pick_files(_app: &tauri::AppHandle) -> Result<Vec<PickedFile>, String> {
-        Err(NOT_YET.into())
+    pub async fn pick_files(app: &tauri::AppHandle) -> Result<Vec<PickedFile>, String> {
+        app.wzp_android()
+            .pick_files()
+            .await
+            .map(|v| v.into_iter().map(conv).collect())
+            .map_err(|e| e.to_string())
     }
 
-    pub fn take_shared_files(_app: &tauri::AppHandle) -> Result<Vec<PickedFile>, String> {
-        Ok(Vec::new())
+    pub fn take_shared_files(app: &tauri::AppHandle) -> Result<Vec<PickedFile>, String> {
+        app.wzp_android()
+            .take_shared_files()
+            .map(|v| v.into_iter().map(conv).collect())
+            .map_err(|e| e.to_string())
     }
 
     pub async fn save_to_downloads(
-        _app: &tauri::AppHandle,
-        _path: &Path,
-        _name: &str,
-        _mime: Option<&str>,
+        app: &tauri::AppHandle,
+        path: &Path,
+        name: &str,
+        mime: Option<&str>,
     ) -> Result<String, String> {
-        Err(NOT_YET.into())
+        app.wzp_android()
+            .save_to_downloads(path, name, mime)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub fn start_transfer_service(
-        _app: &tauri::AppHandle,
-        _title: &str,
-        _text: &str,
+        app: &tauri::AppHandle,
+        title: &str,
+        text: &str,
     ) -> Result<(), String> {
-        Ok(())
+        app.wzp_android()
+            .start_transfer_service(title, text)
+            .map_err(|e| e.to_string())
     }
 
     pub fn update_transfer_service(
-        _app: &tauri::AppHandle,
-        _text: &str,
-        _progress: Option<(u64, u64)>,
+        app: &tauri::AppHandle,
+        text: &str,
+        progress: Option<(u64, u64)>,
     ) -> Result<(), String> {
-        Ok(())
+        app.wzp_android()
+            .update_transfer_service(text, progress)
+            .map_err(|e| e.to_string())
     }
 
-    pub fn stop_transfer_service(_app: &tauri::AppHandle) -> Result<(), String> {
-        Ok(())
+    pub fn stop_transfer_service(app: &tauri::AppHandle) -> Result<(), String> {
+        app.wzp_android()
+            .stop_transfer_service()
+            .map_err(|e| e.to_string())
     }
 
-    pub async fn request_notification_permission(_app: &tauri::AppHandle) -> Result<bool, String> {
-        Ok(false)
-    }
-
-    pub fn app_data_dir(_app: &tauri::AppHandle) -> Result<PathBuf, String> {
-        Err(NOT_YET.into())
+    pub async fn request_notification_permission(app: &tauri::AppHandle) -> Result<bool, String> {
+        app.wzp_android()
+            .request_notification_permission()
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -120,10 +136,6 @@ mod imp {
 #[cfg(not(target_os = "android"))]
 mod imp {
     use super::*;
-
-    pub fn register_plugins<R: tauri::Runtime>(b: tauri::Builder<R>) -> tauri::Builder<R> {
-        b
-    }
 
     /// Native multi-file picker (tauri-plugin-dialog).
     pub async fn pick_files(app: &tauri::AppHandle) -> Result<Vec<PickedFile>, String> {
@@ -180,10 +192,6 @@ mod imp {
 
     pub async fn request_notification_permission(_app: &tauri::AppHandle) -> Result<bool, String> {
         Ok(true)
-    }
-
-    pub fn app_data_dir(_app: &tauri::AppHandle) -> Result<PathBuf, String> {
-        Err("not used on desktop".into())
     }
 }
 

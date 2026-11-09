@@ -7234,6 +7234,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-wzp-android"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9447,6 +9459,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
+ "tauri-plugin-wzp-android",
  "tempfile",
  "tokio",
  "tracing",

@@ -625,7 +625,7 @@ function renderShared() {
         },
         "Choose contact",
       ),
-      h("button", { type: "button", class: "fs-secondary small", onclick: () => { pendingShared = []; renderShared(); } }, "Discard"),
+      h("button", { type: "button", class: "fs-secondary small", onclick: () => { void invoke("discard_picked", { paths: pendingShared.map(f => f.path) }); pendingShared = []; renderShared(); } }, "Discard"),
     ),
   );
 }
@@ -635,6 +635,16 @@ function addShared(files: PickedFile[]) {
   pendingShared.push(...files);
   renderShared();
   showTab("files");
+}
+
+async function drainShared() {
+  try {
+    const files = await invoke<PickedFile[]>("take_shared_files");
+    const known = new Set(pendingShared.map(f => f.path));
+    addShared(files.filter(f => !known.has(f.path)));
+  } catch {
+    /* not Android / bridge unavailable */
+  }
 }
 
 // Desktop drag-and-drop: drop files on a contact (Contacts tab) or anywhere
@@ -1040,7 +1050,9 @@ async function init() {
       }
       scheduleRender();
     });
-    await listen<PickedFile[]>("wzp-android://shared", e => addShared(e.payload));
+    // Use take_shared_files' result, not the event payload, so cold-start
+    // shares and shares that raced the listener are not lost.
+    await listen("wzp-android://shared", () => void drainShared());
   } catch {
     // Outside Tauri.
     return;
@@ -1056,11 +1068,7 @@ async function init() {
     await refreshContacts();
     await refreshTransfers();
   }
-  try {
-    addShared(await invoke<PickedFile[]>("take_shared_files"));
-  } catch {
-    /* ignore */
-  }
+  await drainShared();
   void setupDragDrop();
   // Presence of contacts can change without events while starting up.
   setInterval(() => {

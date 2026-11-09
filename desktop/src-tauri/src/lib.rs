@@ -3642,12 +3642,16 @@ pub fn run() {
         })),
     });
 
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Android bridge: SAF picker, share target, Downloads, transfer service.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_wzp_android::init());
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
-    platform::register_plugins(builder)
+        .plugin(tauri_plugin_opener::init())
         .manage(state)
         .setup(|app| {
             // Resolve the platform-correct app data dir once at startup so
@@ -3668,11 +3672,10 @@ pub fn run() {
             match load_or_create_seed() {
                 Ok(seed) => {
                     let handle = app.handle().clone();
-                    // Android: the bridge's internal files dir once the
-                    // plugin is wired in; otherwise next to the identity.
-                    let share_root = platform::app_data_dir(&handle)
-                        .map(|d| d.join("share"))
-                        .unwrap_or_else(|_| data_dir.join("share"));
+                    // Next to the identity (internal app storage on Android).
+                    // Not the bridge's app_data_dir(): setup runs on the
+                    // Android main thread, where bridge calls are refused.
+                    let share_root = data_dir.join("share");
                     let st = share::ShareState::new(
                         handle,
                         seed.0,
@@ -3759,6 +3762,7 @@ pub fn run() {
             share::get_settings,
             share::set_settings,
             share::pick_files,
+            share::discard_picked,
             share::pick_download_folder,
             share::take_shared_files,
             share::open_file,
