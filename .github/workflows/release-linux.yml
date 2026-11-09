@@ -5,6 +5,7 @@ on:
     tags: [ "v*" ]
     branches:
       - main
+      - feat/app-files  # TEMP-branch-trigger
     paths-ignore: [ "**.md", "docs/**" ]
   workflow_dispatch:
 

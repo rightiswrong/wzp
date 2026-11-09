@@ -2,6 +2,46 @@
 
 This guide covers all WarzonePhone client applications: Desktop (Tauri), Android, CLI, and Web.
 
+## Sending files
+
+The app opens on the **Files** tab. Tabs at the bottom: **Files | Contacts | Calls | Settings**. Calls work as before (Calls tab); a running call keeps its control bar visible on every tab.
+
+### Your identity
+
+Files and calls use the same identity: the seed in the app data folder (`.wzp/identity`, owner-only permissions). The **Contacts** tab shows your name, your fingerprint (`xxxx:xxxx:…`, 8 groups), a QR code and your contact string (`wzp1…`). Use **Copy contact string** to send it to someone, or let them scan the QR code. Your name defaults to the alias derived from your seed; change it under Settings → Display name.
+
+### Adding contacts
+
+1. Paste the other person's `wzp1…` string into **Add a contact** and press **Add contact**.
+2. They need to add you too. Adding someone also sends them a contact request with your contact string; it appears on their Contacts tab under **Contact requests** (**Add** / **Dismiss**).
+3. New contacts are trusted on first use. Open the **⋯** menu → **Verify…**, compare the fingerprint with the one on their device (in person or on a call), and mark the contact verified only if every group matches.
+
+The dot next to a contact shows presence: filled green = online, hollow = offline, grey = not checked yet.
+
+### Sending
+
+* **Send files…** on the Files tab (pick a contact, then files), or **Send** next to a contact.
+* Desktop: drag files from your file manager onto a contact, or anywhere into the window and pick a contact.
+* Android: use the system **Share → WarzonePhone** sheet; the files wait on the Files tab until you choose a contact.
+
+Each file is limited to 10 GiB. The transfer list shows progress, speed, time left, and whether the transfer is **direct** or **relayed**. You can cancel at any time.
+
+### Receiving
+
+An incoming offer opens a dialog with the sender, file name, size, the sender's fingerprint and a 4-digit **code**. The sender sees the same code in their transfer list; compare it if in doubt. Choose **Accept** or **Decline**. Nothing is written to disk before you accept. If you close the dialog, the offer stays on the Files tab.
+
+Received files go to your Downloads folder on desktop (Settings → Download folder to change it; **Open** / **Show** buttons appear on finished transfers). On Android they are saved to `Downloads/WarzonePhone`, and a notification stays visible while transfers run.
+
+Settings → **Auto-accept files from verified contacts** skips the dialog for verified contacts only (off by default).
+
+### Relay settings
+
+* **WZP relay** (`host:port`): the fallback for file bytes when a direct connection fails (NAT, different networks). Empty = direct only.
+* **Relay access token**: required to use a token-protected WZP relay. It is stored only on this device (owner-only settings file) and is never shown again; the screen only says *Token set* / *No token*. Enter a new value to replace it, or **Clear token**. The receiver doesn't need a token: the sender's invite carries a short-lived ticket for one transfer room. Without a token, files go direct only.
+* **iroh relay** (contacts, presence and invites): *Public n0 relays* (default), *Custom relay* (`https://…`, your own `iroh-relay`), or *Off* (same LAN / direct only).
+
+Changing relay settings or the download folder restarts file sharing; running transfers are cancelled. See docs/SHARE.md, docs/IROH.md and docs/ADMINISTRATION.md for details.
+
 ## Desktop Client (Tauri)
 
 The desktop client is a Tauri application with a native Rust audio engine and a web-based UI. It runs on macOS, Windows, and Linux.

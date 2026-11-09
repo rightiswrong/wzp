@@ -37,6 +37,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
+# File sharing: native file picker (desktop) and open / reveal-in-folder.
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -55,6 +58,9 @@ wzp-fec = { path = "../../crates/wzp-fec" }
 wzp-crypto = { path = "../../crates/wzp-crypto" }
 wzp-transport = { path = "../../crates/wzp-transport" }
 wzp-video = { path = "../../crates/wzp-video" }
+# File sharing: iroh contacts/signaling + wzp-files transfers (docs/SHARE.md).
+wzp-share = { path = "../../crates/wzp-share" }
+wzp-iroh = { path = "../../crates/wzp-iroh" }
 
 # wzp-client pulls in CPAL on every desktop target and, additionally on
 # macOS, VoiceProcessingIO (coreaudio-rs behind the "vpio" feature). The
@@ -104,6 +110,7 @@ jni = "0.21"
 ndk-context = "0.1"
 
 [dev-dependencies]
+tempfile = "3"
 bytes = "1"
 async-trait = "0.1"
 

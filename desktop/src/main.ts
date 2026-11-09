@@ -208,10 +208,12 @@ let cameraCaptureInFlight = false;
 let lastCameraCaptureAtMs = 0;
 let remoteVideoActive = false;
 
-interface FrameCallbackVideoElement extends HTMLVideoElement {
+// requestVideoFrameCallback is in the current DOM typings but may be missing
+// at runtime on older WebViews, so keep the members optional.
+type FrameCallbackVideoElement = Omit<HTMLVideoElement, "requestVideoFrameCallback" | "cancelVideoFrameCallback"> & {
   requestVideoFrameCallback?: (callback: (now: DOMHighResTimeStamp, metadata: unknown) => void) => number;
   cancelVideoFrameCallback?: (handle: number) => void;
-}
+};
 
 // Keep the local preview out of the video stage stacking context so it can float
 // above the call drawer and remain draggable on phones.
@@ -684,7 +686,7 @@ function scheduleCameraFrameCapture() {
       }
       cameraFrameCallbackHandle = video.requestVideoFrameCallback!(onVideoFrame);
     };
-    cameraFrameCallbackHandle = video.requestVideoFrameCallback(onVideoFrame);
+    cameraFrameCallbackHandle = video.requestVideoFrameCallback!(onVideoFrame);
     debugLog("camera:capture_clock", { mode: "video_frame_callback", interval_ms: CAMERA_CAPTURE_INTERVAL_MS });
     return;
   }
@@ -781,8 +783,8 @@ async function drawRemoteFrame(frame: { serial: number; width: number; height: n
     await img.decode();
   } else {
     await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("remote video image decode failed"));
+      (img as HTMLImageElement).onload = () => resolve();
+      (img as HTMLImageElement).onerror = () => reject(new Error("remote video image decode failed"));
     });
   }
 
