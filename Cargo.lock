@@ -9344,7 +9344,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-android"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9370,7 +9370,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-client"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9405,7 +9405,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-codec"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytemuck",
  "codec2",
@@ -9419,7 +9419,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-crypto"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bincode",
  "bip39",
@@ -9440,7 +9440,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-desktop"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9477,7 +9477,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-fec"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "rand 0.8.6",
  "raptorq",
@@ -9487,7 +9487,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-files"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "blake3",
  "bytes",
@@ -9515,7 +9515,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-iroh"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "clap 4.6.1",
  "data-encoding",
@@ -9557,7 +9557,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-relay"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9594,7 +9594,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-share"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "clap 4.6.1",
  "hex",
@@ -9618,7 +9618,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-transport"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -9637,7 +9637,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-video"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "ndk 0.9.0",
@@ -9651,7 +9651,7 @@ dependencies = [
 
 [[package]]
 name = "wzp-web"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",

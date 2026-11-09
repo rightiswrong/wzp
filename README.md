@@ -2,14 +2,22 @@
 
 Custom lossy VoIP protocol built in Rust. E2E encrypted, FEC-protected, adaptive quality, designed for hostile network conditions.
 
+This fork adds **end-to-end encrypted file sharing** (up to 10 GiB per file) to the WarzonePhone app on Android, Linux (x64 + arm64), Windows and macOS:
+
+- **Contacts over iroh**: your identity is your WZP seed; share a `wzp1…` contact string or QR code, see who's online.
+- **Direct first, relay fallback**: files go peer-to-peer when possible, otherwise through your own token-protected WZP relay (it only ever sees ciphertext). Recipients join with a one-transfer ticket, never your relay token.
+- **Resumable and verified**: every chunk is BLAKE3-checked on arrival; interrupted transfers resume.
+
+Downloads: see [Releases](../../releases) and [docs/INSTALL.md](docs/INSTALL.md) (builds are unsigned). Using it: [docs/USER_GUIDE.md](docs/USER_GUIDE.md#sending-files). Running a relay: [docs/ADMINISTRATION.md](docs/ADMINISTRATION.md). Protocol: [docs/FILE-TRANSFER.md](docs/FILE-TRANSFER.md), [docs/SHARE.md](docs/SHARE.md), [docs/IROH.md](docs/IROH.md).
+
 ## Quick Start
 
 ```bash
 # Build
 cargo build --release
 
-# Run relay
-./target/release/wzp-relay --listen 0.0.0.0:4433
+# Run relay (token-protected)
+./target/release/wzp-relay --listen 0.0.0.0:4433 --access-token "$(openssl rand -hex 32)"
 
 # Send a test tone
 ./target/release/wzp-client --send-tone 5 relay-addr:4433
