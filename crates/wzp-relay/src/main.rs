@@ -360,7 +360,11 @@ async fn main() -> anyhow::Result<()> {
     let relay_fp = relay_seed.derive_identity().public_identity().fingerprint;
     info!(addr = %config.listen_addr, fingerprint = %relay_fp, "WarzonePhone relay starting");
 
-    let (server_config, cert_der) = wzp_transport::server_config_from_seed(&relay_seed.0);
+    let (mut server_config, cert_der) = wzp_transport::server_config_from_seed(&relay_seed.0);
+    // VoIP defaults + bulk-capable stream window / chosen congestion
+    // controller (file sessions get larger connection windows per
+    // connection once their room is known, see file_relay).
+    server_config.transport_config(std::sync::Arc::new(config.transport_config()));
     let tls_fp = wzp_transport::tls_fingerprint(&cert_der);
     info!(tls_fingerprint = %tls_fp, "TLS certificate (deterministic from relay identity)");
 
@@ -2048,6 +2052,12 @@ async fn main() -> anyhow::Result<()> {
                     participant_id,
                     transport.clone(),
                 ));
+                if wzp_relay::file_relay::room_is_file_session(&room_name) {
+                    wzp_relay::file_relay::tune_file_connection(
+                        transport.connection(),
+                        &file_stream_limits,
+                    );
+                }
                 // Two-party rooms: splice the participants' uni streams
                 // (wzp-files E2E-encrypted control + chunk data).
                 let splice_handle = if wzp_relay::file_relay::room_allows_streams(&room_name) {

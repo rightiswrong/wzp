@@ -47,18 +47,24 @@ pub struct StreamRelayLimits {
     pub max_concurrent_streams: usize,
     /// How long a new stream waits for the other participant.
     pub peer_wait: Duration,
+    /// Connection receive window granted to file connections (bytes).
+    pub receive_window: u64,
+    /// Connection send buffer for file connections (bytes).
+    pub send_window: u64,
 }
 
 impl Default for StreamRelayLimits {
     fn default() -> Self {
         Self {
-            rate_bytes_per_sec: 32 * 1024 * 1024,
+            rate_bytes_per_sec: 64 * 1024 * 1024,
             burst_bytes: 8 * 1024 * 1024,
             session_byte_cap: 64 * 1024 * 1024 * 1024,
             // 10 GiB + ~1% AEAD/framing overhead + manifest.
             stream_byte_cap: 10 * 1024 * 1024 * 1024 + 128 * 1024 * 1024,
             max_concurrent_streams: 32,
             peer_wait: Duration::from_secs(10),
+            receive_window: 16 * 1024 * 1024,
+            send_window: 16 * 1024 * 1024,
         }
     }
 }
@@ -67,6 +73,55 @@ impl Default for StreamRelayLimits {
 /// two-party rooms, so "the other participant" is unambiguous.
 pub fn room_allows_streams(room: &str) -> bool {
     room.starts_with("file-") || room.starts_with("call-")
+}
+
+/// True for rooms whose connections get bulk flow-control windows.
+pub fn room_is_file_session(room: &str) -> bool {
+    room.starts_with("file-")
+}
+
+/// Relay listener transport config: VoIP defaults, plus a per-stream
+/// receive window large enough for bulk streams and a selectable
+/// congestion controller.
+///
+/// QUIC fixes the per-stream window (`initial_max_stream_data_*`) and the
+/// congestion controller when the connection is accepted, before the room
+/// name (SNI) is known, so these two apply to every connection. That is
+/// safe for VoIP connections: the amount a peer can have in flight is
+/// bounded by the *connection* window, which stays at the VoIP 256 KiB
+/// until [`tune_file_connection`] raises it for `file-*` rooms.
+pub fn relay_transport_config(
+    stream_receive_window: u64,
+    congestion: &str,
+) -> quinn::TransportConfig {
+    let mut c = wzp_transport::voip_transport_config();
+    c.stream_receive_window(
+        quinn::VarInt::from_u64(stream_receive_window).unwrap_or(quinn::VarInt::MAX),
+    );
+    match congestion {
+        "bbr" => {
+            c.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
+        }
+        "newreno" => {
+            c.congestion_controller_factory(Arc::new(quinn::congestion::NewRenoConfig::default()));
+        }
+        "cubic" | "" => {}
+        other => warn!(
+            congestion = other,
+            "unknown congestion controller, using cubic"
+        ),
+    }
+    c
+}
+
+/// Raise flow-control windows on a connection once it is known to be a
+/// file session (connection receive window and send buffer can change
+/// mid-connection; quinn sends MAX_DATA updates immediately).
+pub fn tune_file_connection(conn: &quinn::Connection, limits: &StreamRelayLimits) {
+    conn.set_receive_window(
+        quinn::VarInt::from_u64(limits.receive_window).unwrap_or(quinn::VarInt::MAX),
+    );
+    conn.set_send_window(limits.send_window);
 }
 
 /// True for rooms the relay must cap at two participants.
@@ -218,7 +273,11 @@ async fn splice(
             let _ = src.stop(quinn::VarInt::from_u32(STREAM_CAP));
             return;
         }
-        let wait = state.shaper.lock().unwrap().reserve(n);
+        let wait = if limits.rate_bytes_per_sec == 0 {
+            Duration::ZERO
+        } else {
+            state.shaper.lock().unwrap().reserve(n)
+        };
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
         }

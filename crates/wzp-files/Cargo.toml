@@ -32,3 +32,4 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"
 tempfile = "3"
 tracing-subscriber = { workspace = true }
 rand = { workspace = true }
+socket2 = { workspace = true }

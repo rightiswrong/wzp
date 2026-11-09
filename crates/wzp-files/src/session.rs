@@ -250,11 +250,14 @@ pub fn bulk_transport_config() -> quinn::TransportConfig {
     ));
     c.keep_alive_interval(Some(Duration::from_secs(5)));
     c.receive_window(quinn::VarInt::from_u32(32 * 1024 * 1024));
-    c.stream_receive_window(quinn::VarInt::from_u32(8 * 1024 * 1024));
+    c.stream_receive_window(quinn::VarInt::from_u32(16 * 1024 * 1024));
     c.send_window(32 * 1024 * 1024);
     c.max_concurrent_uni_streams(quinn::VarInt::from_u32(64));
     c.datagram_receive_buffer_size(Some(1024 * 1024));
     c.initial_rtt(Duration::from_millis(100));
+    // BBR: measured 2-3x faster than Cubic through the relay at 20-100 ms
+    // RTT (docs/FILE-TRANSFER.md, "Throughput").
+    c.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
     c
 }
 

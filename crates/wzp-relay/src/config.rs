@@ -102,8 +102,21 @@ pub struct RelayConfig {
     #[serde(skip)]
     pub event_log: Option<String>,
     /// File transfer (two-party rooms): sustained spliced-stream bytes/s
-    /// per session. Default 32 MiB/s.
+    /// per session; 0 = unshaped. Default 64 MiB/s (~540 Mbit/s).
     pub file_rate_bytes_per_sec: u64,
+    /// File sessions (`file-*` rooms): QUIC connection receive window the
+    /// relay grants after it sees the room name. Default 16 MiB.
+    pub file_receive_window: u64,
+    /// File sessions: QUIC send buffer per connection. Default 16 MiB.
+    pub file_send_window: u64,
+    /// Per-stream QUIC receive window advertised on *every* connection
+    /// (must be fixed before the room is known). VoIP connections stay
+    /// bounded by their 256 KiB connection window. Default 16 MiB.
+    pub stream_receive_window: u64,
+    /// Congestion controller for all relay connections: "bbr" (default),
+    /// "cubic" or "newreno". Applies to calls too; set "cubic" to restore
+    /// the pre-1.1 behaviour.
+    pub congestion: String,
     /// File transfer: total spliced bytes allowed per session. Default 64 GiB.
     pub file_session_byte_cap: u64,
     /// File transfer: max bytes per spliced stream (≈ max file size).
@@ -112,10 +125,20 @@ pub struct RelayConfig {
 }
 
 impl RelayConfig {
+    /// QUIC transport parameters for the relay's listener: the VoIP
+    /// defaults plus [`Self::stream_receive_window`] and
+    /// [`Self::congestion`]. File connections get bigger connection windows
+    /// later via [`crate::file_relay::tune_file_connection`].
+    pub fn transport_config(&self) -> quinn::TransportConfig {
+        crate::file_relay::relay_transport_config(self.stream_receive_window, &self.congestion)
+    }
+
     /// Limits for [`crate::file_relay::run_stream_splicer`].
     pub fn file_stream_limits(&self) -> crate::file_relay::StreamRelayLimits {
         crate::file_relay::StreamRelayLimits {
             rate_bytes_per_sec: self.file_rate_bytes_per_sec,
+            receive_window: self.file_receive_window,
+            send_window: self.file_send_window,
             session_byte_cap: self.file_session_byte_cap,
             stream_byte_cap: self.file_stream_byte_cap,
             ..Default::default()
@@ -146,7 +169,11 @@ impl Default for RelayConfig {
             advertised_addr: None,
             debug_tap: None,
             event_log: None,
-            file_rate_bytes_per_sec: 32 * 1024 * 1024,
+            file_rate_bytes_per_sec: 64 * 1024 * 1024,
+            file_receive_window: 16 * 1024 * 1024,
+            file_send_window: 16 * 1024 * 1024,
+            stream_receive_window: 16 * 1024 * 1024,
+            congestion: "bbr".to_string(),
             file_session_byte_cap: 64 * 1024 * 1024 * 1024,
             file_stream_byte_cap: 10 * 1024 * 1024 * 1024 + 128 * 1024 * 1024,
         }
