@@ -112,6 +112,13 @@ pub fn client_config() -> quinn::ClientConfig {
 }
 
 /// Shared transport configuration tuned for lossy VoIP.
+/// The VoIP-tuned transport parameters used by [`client_config`] and the
+/// server configs. Exposed so callers (the relay) can start from them and
+/// adjust individual knobs.
+pub fn voip_transport_config() -> quinn::TransportConfig {
+    transport_config()
+}
+
 fn transport_config() -> quinn::TransportConfig {
     let mut config = quinn::TransportConfig::default();
 

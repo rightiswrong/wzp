@@ -76,9 +76,112 @@ pub struct RelayRendezvous {
     pub addr: SocketAddr,
     /// Room name (`file-<random>`); acts as the rendezvous token.
     pub room: String,
+    /// Room-scoped relay ticket (`wzpt1.…`, see [`request_room_ticket`])
+    /// for relays that require access tokens. Never a relay master token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
 }
+
+/// A room ticket issued by a token-protected relay.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RoomTicketInfo {
+    pub room: String,
+    pub ticket: String,
+    /// Unix seconds; the ticket must be used to *join* before this.
+    pub expires_unix: u64,
+}
+
+/// Ask a token-protected relay for a ticket admitting the holder to `room`
+/// (a `file-*` room, max two participants). Uses a short-lived
+/// connection that does not join the room.
+pub async fn request_room_ticket(
+    relay: SocketAddr,
+    room: &str,
+    relay_token: &str,
+) -> Result<RoomTicketInfo> {
+    let room = relay_room_name(room);
+    if !room.starts_with(FILE_ROOM_PREFIX) {
+        return Err(FileError::Invalid(
+            "tickets exist only for file-* rooms".into(),
+        ));
+    }
+    let endpoint = client_endpoint(relay)?;
+    let conn = tokio::time::timeout(
+        Duration::from_secs(20),
+        wzp_transport::connect(&endpoint, relay, &room, client_config()),
+    )
+    .await
+    .map_err(|_| FileError::Timeout("relay connect"))??;
+    let transport = QuinnTransport::new(conn.clone());
+    transport
+        .send_signal(&SignalMessage::RoomTicketRequest {
+            version: default_signal_version(),
+            room: room.clone(),
+            token: relay_token.to_string(),
+        })
+        .await?;
+    let reply = tokio::time::timeout(Duration::from_secs(20), transport.recv_signal()).await;
+    let out = match reply {
+        Ok(Ok(Some(SignalMessage::RoomTicket {
+            room: r,
+            ticket,
+            expires_unix,
+            ..
+        }))) if r == room => Ok(RoomTicketInfo {
+            room: r,
+            ticket,
+            expires_unix,
+        }),
+        Ok(Ok(Some(SignalMessage::RoomTicket { .. }))) => Err(FileError::Protocol(
+            "relay issued a ticket for another room".into(),
+        )),
+        Ok(_) => Err(refusal(&conn)
+            .await
+            .unwrap_or_else(|| FileError::Auth("relay refused the ticket request".into()))),
+        Err(_) => Err(FileError::Timeout("room ticket")),
+    };
+    conn.close(quinn::VarInt::from_u32(0), b"done");
+    out
+}
+
+/// Build an invite with a fresh random room. With `relay_token`, the host
+/// fetches a room ticket from the relay and puts *it* (never the token)
+/// into `relay.auth_token`, so a joiner without a relay account can enter.
+pub async fn create_invite(
+    relay: Option<SocketAddr>,
+    relay_token: Option<&str>,
+    direct: Vec<SocketAddr>,
+    inviter_seed: &[u8; 32],
+) -> Result<FileSessionInvite> {
+    let mut inv = FileSessionInvite::new(relay, direct, inviter_seed);
+    if let (Some(r), Some(tok)) = (inv.relay.as_mut(), relay_token) {
+        let t = request_room_ticket(r.addr, &r.room, tok).await?;
+        r.auth_token = Some(t.ticket);
+    }
+    Ok(inv)
+}
+
+/// If the relay closed `conn` with the unauthorized code, turn it into
+/// [`FileError::Auth`] carrying the relay's reason.
+async fn refusal(conn: &quinn::Connection) -> Option<FileError> {
+    let reason = tokio::time::timeout(Duration::from_secs(2), conn.closed())
+        .await
+        .ok()?;
+    match reason {
+        quinn::ConnectionError::ApplicationClosed(c)
+            if c.error_code.into_inner() == RELAY_UNAUTHORIZED as u64 =>
+        {
+            Some(FileError::Auth(format!(
+                "relay refused: {}",
+                String::from_utf8_lossy(&c.reason)
+            )))
+        }
+        _ => None,
+    }
+}
+
+/// QUIC close code wzp-relay uses for unauthenticated clients.
+const RELAY_UNAUTHORIZED: u32 = 0x5741;
 
 impl FileSessionInvite {
     /// New invite for `inviter_seed`'s identity with a fresh random relay room.
@@ -250,11 +353,14 @@ pub fn bulk_transport_config() -> quinn::TransportConfig {
     ));
     c.keep_alive_interval(Some(Duration::from_secs(5)));
     c.receive_window(quinn::VarInt::from_u32(32 * 1024 * 1024));
-    c.stream_receive_window(quinn::VarInt::from_u32(8 * 1024 * 1024));
+    c.stream_receive_window(quinn::VarInt::from_u32(16 * 1024 * 1024));
     c.send_window(32 * 1024 * 1024);
     c.max_concurrent_uni_streams(quinn::VarInt::from_u32(64));
     c.datagram_receive_buffer_size(Some(1024 * 1024));
     c.initial_rtt(Duration::from_millis(100));
+    // BBR: measured 2-3x faster than Cubic through the relay at 20-100 ms
+    // RTT (docs/FILE-TRANSFER.md, "Throughput").
+    c.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
     c
 }
 
@@ -313,12 +419,15 @@ pub async fn connect_via_relay_with(
             })
             .await?;
     }
-    tokio::time::timeout(
+    let hs = tokio::time::timeout(
         opts.handshake_timeout,
         relay_handshake(&*transport, seed, opts.alias.as_deref()),
     )
     .await
-    .map_err(|_| FileError::Timeout("relay handshake"))??;
+    .map_err(|_| FileError::Timeout("relay handshake"))?;
+    if let Err(e) = hs {
+        return Err(refusal(&conn).await.unwrap_or(e));
+    }
     info!(%relay, room = %room, "joined relay room, waiting for peer");
 
     // Watch RoomUpdate to learn when the peer is present / gone. Draining

@@ -34,6 +34,24 @@ pub async fn accept_handshake(
         .recv_signal()
         .await?
         .ok_or_else(|| anyhow::anyhow!("connection closed before receiving CallOffer"))?;
+    accept_handshake_with_offer(transport, seed, offer).await
+}
+
+/// [`accept_handshake`] when the caller already read the client's first
+/// signal (e.g. after [`crate::access::gate_room_connection`]).
+pub async fn accept_handshake_with_offer(
+    transport: &dyn MediaTransport,
+    seed: &[u8; 32],
+    offer: SignalMessage,
+) -> Result<
+    (
+        Box<dyn CryptoSession>,
+        QualityProfile,
+        String,
+        Option<String>,
+    ),
+    anyhow::Error,
+> {
 
     let (
         caller_identity_pub,

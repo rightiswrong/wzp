@@ -13,12 +13,17 @@ use wzp_files::{
 const USAGE: &str = "\
 Usage:
   wzp-client send-file <path>... (--relay <addr> [--room <token>] | --direct <addr>) [options]
-  wzp-client receive-files (--relay <addr> --room <token> | --listen <addr>) [--dir <dir>] [--auto-accept] [options]
+  wzp-client receive-files (--invite <json|@file> | --relay <addr> --room <token> [--token <ticket>] | --listen <addr>)
+                           [--dir <dir>] [--auto-accept] [options]
 
 Options:
   --seed <hex> | --mnemonic <words...>   Identity (default: ephemeral)
   --peer <fingerprint>    Require this peer identity (hex, colons optional)
-  --token <token>         Relay auth token
+  --token <token>         Relay auth token or room ticket (sent as-is)
+  --relay-token <token>   Relay access token (sender; env WZP_RELAY_TOKEN). The sender
+                          fetches a room ticket for the receiver; the token itself is
+                          never shared.
+  --invite <json|@file>   Join using an invite printed by send-file
   --chunk-size <bytes>    Chunk size for sending (default 1 MiB)
   --max-size <bytes>      Max file size (default 10 GiB)
   --rate <bytes/s>        Cap send rate
@@ -37,6 +42,8 @@ struct FileArgs {
     mnemonic: Option<String>,
     peer: Option<String>,
     token: Option<String>,
+    relay_token: Option<String>,
+    invite: Option<String>,
     chunk_size: Option<u32>,
     max_size: Option<u64>,
     rate: Option<u64>,
@@ -95,6 +102,8 @@ fn parse(args: &[String]) -> FileArgs {
             }
             "--peer" => a.peer = Some(val(&mut i, "--peer")),
             "--token" => a.token = Some(val(&mut i, "--token")),
+            "--relay-token" => a.relay_token = Some(val(&mut i, "--relay-token")),
+            "--invite" => a.invite = Some(val(&mut i, "--invite")),
             "--chunk-size" => {
                 a.chunk_size = Some(
                     val(&mut i, "--chunk-size")
@@ -253,11 +262,43 @@ async fn send_files(a: FileArgs) -> anyhow::Result<()> {
     let session = if let Some(addr) = a.direct {
         connect_direct(addr, &seed.0, &a.opts()).await?
     } else if let Some(relay) = a.relay {
+        let relay_token = a.relay_token.clone().or_else(|| {
+            std::env::var("WZP_RELAY_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+        });
         let room = a.room.clone().unwrap_or_else(random_room);
-        eprintln!(
-            "room: {room}  (receiver: wzp-client receive-files --relay {relay} --room {room})"
-        );
-        connect_via_relay_with(relay, &room, &seed.0, &a.opts()).await?
+        let mut opts = a.opts();
+        let mut invite = wzp_files::FileSessionInvite::new(Some(relay), vec![], &seed.0);
+        if let Some(r) = invite.relay.as_mut() {
+            r.room = wzp_files::relay_room_name(&room);
+        }
+        if let Some(tok) = &relay_token {
+            let t = wzp_files::request_room_ticket(relay, &room, tok).await?;
+            eprintln!(
+                "room ticket valid until unix {} (receiver must join before then)",
+                t.expires_unix
+            );
+            if let Some(r) = invite.relay.as_mut() {
+                r.auth_token = Some(t.ticket.clone());
+            }
+            if opts.auth_token.is_none() {
+                opts.auth_token = Some(tok.clone());
+            }
+        }
+        let r = invite.relay.as_ref().unwrap();
+        match &r.auth_token {
+            Some(ticket) => eprintln!(
+                "receiver: wzp-client receive-files --relay {relay} --room {} --token {ticket}",
+                r.room
+            ),
+            None => eprintln!(
+                "receiver: wzp-client receive-files --relay {relay} --room {}",
+                r.room
+            ),
+        }
+        eprintln!("invite: {}", invite.to_json());
+        connect_via_relay_with(relay, &room, &seed.0, &opts).await?
     } else {
         die("send-file needs --relay or --direct");
     };
@@ -288,7 +329,14 @@ async fn send_files(a: FileArgs) -> anyhow::Result<()> {
 
 async fn receive_files(a: FileArgs) -> anyhow::Result<()> {
     let seed = a.seed();
-    let session = if let Some(bind) = a.listen {
+    let session = if let Some(inv) = &a.invite {
+        let text = match inv.strip_prefix('@') {
+            Some(path) => std::fs::read_to_string(path)?,
+            None => inv.clone(),
+        };
+        let invite = wzp_files::FileSessionInvite::from_json(text.trim())?;
+        wzp_files::join_invite(&invite, &seed.0, &a.opts()).await?
+    } else if let Some(bind) = a.listen {
         let l = listen_direct(bind, &seed.0).await?;
         eprintln!("listening on {}", l.local_addr()?);
         l.accept(&a.opts()).await?

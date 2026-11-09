@@ -574,11 +574,7 @@ type TakenTransfer = (Option<Arc<Outgoing>>, Option<Arc<Incoming>>);
 
 /// Atomically move a transfer from the active maps to `finished`, so that
 /// [`FileEndpoint::wait`] always finds it in one place or the other.
-fn take_transfer(
-    inner: &Inner,
-    id: TransferId,
-    outcome: &Outcome,
-) -> Option<TakenTransfer> {
+fn take_transfer(inner: &Inner, id: TransferId, outcome: &Outcome) -> Option<TakenTransfer> {
     let mut f = inner.finished.lock().unwrap();
     let og = inner.out.lock().unwrap().remove(&id);
     let inc = inner.inc.lock().unwrap().remove(&id);

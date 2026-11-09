@@ -76,7 +76,8 @@ Wants=network-online.target
 Type=simple
 User=wzp
 Group=wzp
-ExecStart=/usr/local/bin/wzp-relay --config /etc/wzp/relay.toml
+ExecStart=/usr/local/bin/wzp-relay --config /etc/wzp/relay.toml --access-tokens /etc/wzp/tokens
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
@@ -106,11 +107,84 @@ cp target/release/wzp-relay /usr/local/bin/
 mkdir -p /etc/wzp
 cp relay.toml /etc/wzp/
 
+# Access tokens (one per line); readable by the service user only
+openssl rand -hex 24 > /etc/wzp/tokens
+chown root:wzp /etc/wzp/tokens && chmod 640 /etc/wzp/tokens
+
 # Enable and start
 systemctl daemon-reload
 systemctl enable --now wzp-relay
 journalctl -u wzp-relay -f
+
+# After editing /etc/wzp/tokens (also picked up automatically within ~2 s)
+systemctl reload wzp-relay
 ```
+
+Ports: the relay needs **UDP 4433** (QUIC: calls, file sessions, ticket
+requests, all on the same port) open inbound; optionally TCP for
+`--ws-port` (browser bridge) and `--metrics-port` (keep that one private).
+
+## Access Control (tokens and room tickets)
+
+By default a relay is open: anyone who can reach UDP 4433 may join rooms
+and push media or files through it. To make it token-protected, configure
+one or more **access tokens**:
+
+```bash
+wzp-relay --access-tokens /etc/wzp/tokens          # file: one token per line, '#' comments
+wzp-relay --access-token "$TOKEN" --access-token "$OTHER"   # repeatable
+```
+
+or in TOML: `access_tokens = ["…"]`, `access_tokens_file = "/etc/wzp/tokens"`.
+
+When any token is configured (or a token file, even an empty one, is set):
+
+* every client connection — calls, file sessions, direct-call signaling
+  (`_signal`), and the WebSocket bridge — must present a token before the
+  relay handshake (`SignalMessage::AuthToken` as the first signal; WS:
+  `{"type":"auth","token":"…"}`). Otherwise the relay sends a Hangup and
+  closes the connection with QUIC error code `0x5741` and reason
+  `unauthorized…`;
+* tokens are kept only as SHA-256 digests, compared in constant time, and
+  never logged;
+* the token file is re-read on `SIGHUP` and whenever its mtime changes
+  (polled every 2 s), so rotation is: add the new token, roll clients,
+  remove the old token. Removing a token does not drop connections that
+  are already established;
+* `--auth-url` keeps working as an alternative/additional backend: a token
+  that is neither a local token nor a ticket is validated over HTTP.
+
+Generate tokens with e.g. `openssl rand -hex 24`. Clients pass it with
+`wzp-client --token <t>` (calls) or `wzp-client send-file --relay-token <t>`
+/ `WZP_RELAY_TOKEN=<t>` (files).
+
+### Room tickets (file recipients without a token)
+
+A file recipient usually has no relay token. The sender (who has one) asks
+the relay for a **room ticket** for its `file-*` room
+(`RoomTicketRequest {room, token}` as the first signal on a connection whose
+SNI is that room; the relay answers `RoomTicket {room, ticket,
+expires_unix}` and closes — it does not join the room). The ticket goes into
+the invite (`FileSessionInvite.relay.auth_token`); the master token never
+leaves the sender.
+
+```
+ticket = "wzpt1." expiry_unix "." max_participants "." hex(HMAC-SHA256(secret,
+          "wzp-ticket-v1\0" || room || "\0" || expiry_be64 || max_be32))
+```
+
+* admits its holder to **exactly that `file-*` room** (two-party: a third
+  participant is refused), nothing else — not other rooms, not `call-*`
+  rooms, not the direct-call signaling channel;
+* must be used to *join* before the expiry (`--ticket-ttl <secs>` /
+  `ticket_ttl_secs`, default **600 s**); an established session may outlive
+  it;
+* the HMAC secret is random per relay and persisted as
+  `relay-ticket-secret` (mode 0600) next to the relay identity
+  (`~/.wzp/`, or the directory of `--identity`). Deleting it invalidates all
+  outstanding tickets.
+
+On an open relay tickets are still issued (harmless) but not needed.
 
 ## TOML Configuration Reference
 
@@ -137,6 +211,28 @@ All fields have defaults. A minimal config file only needs the fields you want t
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `auth_url` | string | none | featherChat auth validation URL. When set, clients must send a bearer token as their first signal message. The relay validates it via `POST <auth_url>` |
+| `access_tokens` | list of strings | `[]` | Relay access tokens (see Access Control) |
+| `access_tokens_file` | string | none | Token file, one per line, `#` comments; reloaded on SIGHUP / change |
+| `ticket_ttl_secs` | integer | `600` | Room-ticket lifetime (time allowed to join) |
+
+### File Transfer / Throughput
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `file_rate_bytes_per_sec` | integer | `67108864` (64 MiB/s) | Per-session shaping of spliced file streams; `0` = unshaped |
+| `file_session_byte_cap` | integer | 64 GiB | Total bytes one session may push through the relay |
+| `file_stream_byte_cap` | integer | 10 GiB + 128 MiB | Bytes per spliced stream (≈ max file size) |
+| `file_receive_window` | integer | 16 MiB | QUIC connection receive window granted to `file-*` connections |
+| `file_send_window` | integer | 16 MiB | QUIC send buffer for `file-*` connections |
+| `stream_receive_window` | integer | 16 MiB | Per-stream QUIC window on *all* connections (VoIP connections stay bounded by their 256 KiB connection window) |
+| `congestion` | string | `"bbr"` | Congestion controller for all relay connections: `bbr`, `cubic`, `newreno` |
+
+Memory: a file session can buffer up to `file_receive_window` +
+`file_send_window` (32 MiB by default) in the relay if the receiving side
+is slower than the sender; size `max_sessions` accordingly. The shaping
+default (64 MiB/s ≈ 540 Mbit/s) lets one transfer use about half of a
+1 Gbit/s uplink; lower it on shared relays, raise it (or `0`) on dedicated
+ones. See docs/FILE-TRANSFER.md, "Throughput", for measurements.
 
 ### Metrics and Monitoring
 
@@ -199,6 +295,7 @@ All fields have defaults. A minimal config file only needs the fields you want t
 ```
 wzp-relay [--config <path>] [--listen <addr>] [--remote <addr>]
           [--auth-url <url>] [--metrics-port <port>]
+          [--access-token <t>]... [--access-tokens <file>] [--ticket-ttl <secs>]
           [--probe <addr>]... [--probe-mesh] [--mesh-status]
           [--trunking] [--global-room <name>]...
           [--debug-tap <room>]
@@ -211,6 +308,9 @@ wzp-relay [--config <path>] [--listen <addr>] [--remote <addr>]
 | `--listen <addr>` | Listen address (default: `0.0.0.0:4433`) |
 | `--remote <addr>` | Remote relay for forwarding mode. Disables room mode |
 | `--auth-url <url>` | featherChat auth endpoint (e.g., `https://chat.example.com/v1/auth/validate`) |
+| `--access-token <t>` | Relay access token. Repeatable. Any token enables enforcement |
+| `--access-tokens <file>` | Token file (one per line, `#` comments), reloaded on SIGHUP and on change |
+| `--ticket-ttl <secs>` | Room-ticket lifetime (default 600) |
 | `--metrics-port <port>` | Prometheus metrics HTTP port (e.g., `9090`) |
 | `--probe <addr>` | Peer relay to probe for health monitoring. Repeatable |
 | `--probe-mesh` | Enable mesh mode for probes |

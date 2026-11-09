@@ -205,7 +205,7 @@ chunk per incoming stream (≤ 4 MiB each) plus the manifest.
   participant (FIN, `RESET` and `STOP_SENDING` are propagated). The relay
   only sees ciphertext and frame lengths.
 * Per session: token-bucket shaping (`file_rate_bytes_per_sec`, default
-  32 MiB/s, burst 8 MiB; shaping, not dropping), total byte cap
+  64 MiB/s, burst 8 MiB, `0` = off; shaping, not dropping), total byte cap
   (`file_session_byte_cap`, 64 GiB), per-stream cap
   (`file_stream_byte_cap`, 10 GiB + 128 MiB), max 32 concurrent spliced
   streams; a stream opened with no peer present waits 10 s and is then
@@ -214,20 +214,63 @@ chunk per incoming stream (≤ 4 MiB each) plus the manifest.
   8 MiB/s (burst 16 MiB) limiter in both forwarding loops; over-budget
   packets are dropped.
 
-Known relay-side limitation: the relay's QUIC server config keeps the
-VoIP flow-control windows (256 KiB per connection, 64 KiB per stream), so
-the *upload* leg (sender → relay) is bounded by roughly
-256 KiB / RTT. The download leg uses the receiver's bulk windows.
-Raising these for file sessions needs either a separate relay listener or
-per-connection transport config (quinn `Incoming::accept_with`) — left for
-a follow-up.
+### Throughput tuning
+
+QUIC fixes the per-stream flow-control window and the congestion
+controller when a connection is accepted — before the relay knows the room
+(SNI) — while the *connection* receive window and the send buffer can be
+changed later (`quinn::Connection::set_receive_window` / `set_send_window`).
+The relay therefore uses one listener (one UDP port, one ALPN) and:
+
+* advertises a 16 MiB per-stream window and uses BBR on **all**
+  connections (`stream_receive_window`, `congestion`). Calls are unaffected
+  in practice: what a peer may have in flight is bounded by the connection
+  window, which stays at the VoIP 256 KiB;
+* raises the connection receive window and send buffer to 16 MiB
+  (`file_receive_window`, `file_send_window`) as soon as a connection's
+  room is known to be `file-*`;
+* wzp-files clients use 32 MiB connection / 16 MiB stream windows and BBR
+  (`bulk_transport_config()`).
+
+A separate file listener/ALPN was rejected: it would need a second port in
+every firewall and invite, for no gain over the in-band approach.
+
+Measured (in-process relay, release build, 2 shared vCPUs, both clients
+behind a UDP delay proxy, 256 MiB, `heavy_relay_throughput`):
+
+| RTT | before (VoIP windows, Cubic, 32 MiB/s shaping) | after |
+|---|---|---|
+| 0 ms | 32.9 MiB/s (shaper cap) | 64.1 MiB/s (shaper cap) |
+| 20 ms | 5.4 MiB/s | 43.8 MiB/s |
+| 50 ms | 2.3 MiB/s | 35.6 MiB/s |
+| 100 ms | 1.2 MiB/s | 22.2 MiB/s |
+
+Congestion controller comparison at the same windows (client/relay):
+Cubic/Cubic 15.6 / 17.7 / 12.7 MiB/s at 20/50/100 ms; BBR on only one side
+≈ the same; BBR/BBR 41.9 / 37.4 / 23.0 MiB/s. Before the change a 10 GiB
+file at 50 ms took ≈ 75 min; now ≈ 5 min.
+
+Run: `cargo test --release -p wzp-files --lib heavy_relay_throughput -- --ignored --nocapture`
+(`quick_relay_throughput_with_rtt`, 16 MiB at 50 ms, runs in CI).
+
+### Token-protected relays
+
+If the relay requires access tokens (docs/ADMINISTRATION.md, "Access
+Control"), the host passes its token as `ConnectOptions.auth_token` and
+creates the invite with `create_invite(relay, Some(token), direct, seed)`,
+which calls `request_room_ticket()` and stores the **ticket** (never the
+token) in `FileSessionInvite.relay.auth_token`. `join_invite()` presents
+that ticket. A ticket admits only its `file-*` room (two participants) and
+must be used to join before it expires (default 10 min). Refusals surface
+as `FileError::Auth("relay refused: …")`.
 
 ## 8. CLI
 
 ```
-wzp-client send-file <path>... --relay <addr> [--room <token>] [--peer <fp>] [--seed <hex>]
+wzp-client send-file <path>... --relay <addr> [--room <token>] [--relay-token <t>] [--peer <fp>] [--seed <hex>]
 wzp-client send-file <path>... --direct <addr>
-wzp-client receive-files --relay <addr> --room <token> --dir <dir> [--auto-accept] [--peer <fp>]
+wzp-client receive-files --relay <addr> --room <token> [--token <ticket>] --dir <dir> [--auto-accept] [--peer <fp>]
+wzp-client receive-files --invite '<json>' | --invite @invite.json --dir <dir>
 wzp-client receive-files --listen <addr> --dir <dir> [--auto-accept]
 ```
 

@@ -4,6 +4,9 @@
 
 #![allow(dead_code)]
 
+mod access;
+mod throughput;
+
 mod common {
 
     use std::net::SocketAddr;
@@ -34,9 +37,31 @@ mod common {
     }
 
     pub async fn start_relay_with(limits: StreamRelayLimits) -> TestRelay {
+        start_relay_full(
+            limits,
+            Arc::new(wzp_relay::access::AccessControl::open([3u8; 32])),
+        )
+        .await
+    }
+
+    pub async fn start_relay_with_access(
+        access: Arc<wzp_relay::access::AccessControl>,
+    ) -> TestRelay {
+        start_relay_full(StreamRelayLimits::default(), access).await
+    }
+
+    /// Mirrors wzp-relay main.rs: access gate, relay handshake, room join,
+    /// media/signal loops, stream splicer.
+    pub async fn start_relay_full(
+        limits: StreamRelayLimits,
+        access: Arc<wzp_relay::access::AccessControl>,
+    ) -> TestRelay {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let seed = [0x42u8; 32];
-        let (sc, _) = wzp_transport::server_config_from_seed(&seed);
+        // Same listener tuning as wzp-relay's main.rs (RelayConfig defaults).
+        let rc = wzp_relay::config::RelayConfig::default();
+        let (mut sc, _) = wzp_transport::server_config_from_seed(&seed);
+        sc.transport_config(Arc::new(rc.transport_config()));
         let ep = wzp_transport::create_endpoint("127.0.0.1:0".parse().unwrap(), Some(sc)).unwrap();
         let addr = ep.local_addr().unwrap();
         let rooms = Arc::new(RoomManager::new());
@@ -47,6 +72,7 @@ mod common {
                 let rm = rm.clone();
                 let metrics = metrics.clone();
                 let limits = limits.clone();
+                let access = access.clone();
                 tokio::spawn(async move {
                     let Ok(conn) = incoming.await else { return };
                     let room_name = conn
@@ -55,9 +81,47 @@ mod common {
                         .and_then(|hd| hd.server_name.clone())
                         .unwrap_or_else(|| "default".into());
                     let addr = conn.remote_address();
+                    if file_relay::room_is_file_session(&room_name) {
+                        file_relay::tune_file_connection(&conn, &limits);
+                    }
                     let transport = Arc::new(wzp_transport::QuinnTransport::new(conn));
+                    if room_name == "_signal" {
+                        // Direct-call signaling: only the auth gate matters here.
+                        if wzp_relay::access::gate_signal_connection(&transport, &access, None)
+                            .await
+                            .is_ok()
+                        {
+                            let _ = wzp_proto::MediaTransport::send_signal(
+                                &*transport,
+                                &wzp_proto::SignalMessage::Pong {
+                                    version: 1,
+                                    timestamp_ms: 0,
+                                },
+                            )
+                            .await;
+                            transport.connection().closed().await;
+                        }
+                        return;
+                    }
+                    let offer = match wzp_relay::access::gate_room_connection(
+                        &transport, &room_name, &access, None,
+                    )
+                    .await
+                    {
+                        wzp_relay::access::Gate::Join { offer, .. } => offer,
+                        wzp_relay::access::Gate::TicketIssued => {
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            return;
+                        }
+                        wzp_relay::access::Gate::Rejected(_) => return,
+                    };
                     let Ok((_s, _p, fp, alias)) =
-                        wzp_relay::handshake::accept_handshake(&*transport, &seed).await
+                        wzp_relay::handshake::accept_handshake_with_offer(
+                            &*transport,
+                            &seed,
+                            offer,
+                        )
+                        .await
                     else {
                         return;
                     };
@@ -232,7 +296,10 @@ mod transfer {
                 Ok(Err(_)) | Err(_) => break,
             }
         }
-        assert!(saw_started && saw_completed, "started={saw_started} completed={saw_completed}");
+        assert!(
+            saw_started && saw_completed,
+            "started={saw_started} completed={saw_completed}"
+        );
 
         // Second transfer in the other direction on the same session.
         let back = random_file(&dst.path().join("reply.txt"), 1000);

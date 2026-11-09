@@ -88,6 +88,15 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.wzp-fec]
 opt-level = 3
+# File transfer crypto/hashing (wzp-files) — keeps debug-build e2e tests fast.
+[profile.dev.package.chacha20]
+opt-level = 3
+[profile.dev.package.chacha20poly1305]
+opt-level = 3
+[profile.dev.package.poly1305]
+opt-level = 3
+[profile.dev.package.blake3]
+opt-level = 3
 
 # Phase 0 (opus-DRED): removed the [patch.crates-io] audiopus_sys = { path =
 # "vendor/audiopus_sys" } block. That patch existed to fix a Windows clang-cl
