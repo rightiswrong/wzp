@@ -24,6 +24,11 @@ mod android_audio;
 // Direct-call history store (persisted JSON in app data dir).
 mod history;
 
+// File sharing (wzp-share node, settings, commands) and the platform glue
+// (Android bridge plugin calls live only in `platform`).
+mod platform;
+mod share;
+
 // CallEngine has a unified impl on both targets now — the Android branch of
 // CallEngine::start() routes audio through the standalone wzp-native cdylib
 // (loaded via the wzp_native module below), the desktop branch uses CPAL.
@@ -749,7 +754,8 @@ fn load_or_create_seed() -> Result<wzp_crypto::Seed, String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("create identity dir: {e}"))?;
     }
     let hex: String = seed.0.iter().map(|b| format!("{b:02x}")).collect();
-    std::fs::write(&path, hex).map_err(|e| format!("write identity: {e}"))?;
+    // Owner-only (0600 on Unix): the seed is the identity for calls and files.
+    share::write_private(&path, hex.as_bytes()).map_err(|e| format!("write identity: {e}"))?;
     Ok(seed)
 }
 
@@ -3644,6 +3650,8 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(state)
         .setup(|app| {
             // Resolve the platform-correct app data dir once at startup so
@@ -3658,7 +3666,28 @@ pub fn run() {
                 tracing::warn!("failed to create app data dir {data_dir:?}: {e}");
             }
             tracing::info!("app data dir: {data_dir:?}");
-            let _ = APP_DATA_DIR.set(data_dir);
+            let _ = APP_DATA_DIR.set(data_dir.clone());
+
+            // File sharing: one ShareNode per app, same seed as calls.
+            match load_or_create_seed() {
+                Ok(seed) => {
+                    let handle = app.handle().clone();
+                    // Next to the identity (internal app storage on Android).
+                    // Not the bridge's app_data_dir(): setup runs on the
+                    // Android main thread, where bridge calls are refused.
+                    let share_root = data_dir.join("share");
+                    let st = share::ShareState::new(
+                        handle,
+                        seed.0,
+                        derive_alias(&seed),
+                        &data_dir,
+                        share_root,
+                    );
+                    app.manage(st.clone());
+                    share::start(st);
+                }
+                Err(e) => tracing::error!("file sharing disabled: no identity: {e}"),
+            }
 
             // Load the standalone wzp-native cdylib (Oboe audio bridge) and
             // cache its exported function pointers. The library handle is
@@ -3716,6 +3745,29 @@ pub fn run() {
             get_call_debug_logs,
             call_debug_log,
             push_camera_frame,
+            share::share_status,
+            share::get_share_identity,
+            share::add_contact,
+            share::remove_contact,
+            share::verify_contact,
+            share::list_contacts,
+            share::list_contact_requests,
+            share::dismiss_contact_request,
+            share::send_files,
+            share::accept,
+            share::reject,
+            share::cancel,
+            share::list_transfers,
+            share::clear_finished,
+            share::get_settings,
+            share::set_settings,
+            share::pick_files,
+            share::discard_picked,
+            share::pick_download_folder,
+            share::take_shared_files,
+            share::open_file,
+            share::reveal_in_folder,
+            share::open_download_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running WarzonePhone");

@@ -13,8 +13,60 @@
     <div id="app">
 
       <!-- ═══════════════════════════════════════════════════════
-           LOBBY — default view, auto-connects signal on launch
+           FILES — default view (file sharing, see src/files.ts)
            ═══════════════════════════════════════════════════════ -->
+      <section id="view-files" class="view" role="tabpanel" aria-labelledby="tab-files">
+        <header class="view-header">
+          <h1>Files</h1>
+          <div id="fs-status" class="fs-status" role="status" aria-live="polite"></div>
+        </header>
+        <div id="fs-shared-bar" class="fs-card fs-shared hidden"></div>
+        <div id="fs-offers" class="fs-offers" aria-live="polite"></div>
+        <button id="fs-send-btn" class="fs-primary fs-send-main" type="button">Send files…</button>
+        <div class="fs-section-head">
+          <h2>Transfers</h2>
+          <button id="fs-clear-btn" class="fs-link" type="button">Clear finished</button>
+        </div>
+        <ul id="fs-transfers" class="fs-list" aria-label="Transfers"></ul>
+        <p id="fs-transfers-empty" class="fs-empty">No transfers yet. Add a contact, then send them a file.</p>
+      </section>
+
+      <!-- ═════ CONTACTS ═════ -->
+      <section id="view-contacts" class="view hidden" role="tabpanel" aria-labelledby="tab-contacts">
+        <header class="view-header"><h1>Contacts</h1></header>
+        <div class="fs-card fs-identity">
+          <div class="fs-identity-top">
+            <div id="fs-qr" class="fs-qr" role="img" aria-label="QR code of your contact string"></div>
+            <div class="fs-identity-text">
+              <div class="fs-label">You are</div>
+              <div id="fs-my-name" class="fs-my-name">…</div>
+              <div class="fs-label">Fingerprint</div>
+              <code id="fs-my-fp" class="fs-fp"></code>
+            </div>
+          </div>
+          <label class="fs-label" for="fs-my-contact">Your contact string — share it, or let them scan the QR code</label>
+          <textarea id="fs-my-contact" class="fs-contact-str" readonly rows="3"></textarea>
+          <button id="fs-copy-contact" class="fs-secondary" type="button">Copy contact string</button>
+        </div>
+        <div class="fs-card">
+          <label class="fs-label" for="fs-add-input">Add a contact</label>
+          <textarea id="fs-add-input" class="fs-contact-str" rows="3" placeholder="Paste a wzp1… contact string"></textarea>
+          <button id="fs-add-btn" class="fs-primary" type="button">Add contact</button>
+          <div id="fs-add-msg" class="fs-msg" role="status" aria-live="polite"></div>
+        </div>
+        <div id="fs-requests-wrap" class="hidden">
+          <div class="fs-section-head"><h2>Contact requests</h2></div>
+          <ul id="fs-requests" class="fs-list" aria-label="Contact requests"></ul>
+        </div>
+        <div class="fs-section-head"><h2>Your contacts</h2></div>
+        <ul id="fs-contacts" class="fs-list" aria-label="Contacts"></ul>
+        <p id="fs-contacts-empty" class="fs-empty">No contacts yet.</p>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════
+           CALLS — the original lobby, auto-connects signal on launch
+           ═══════════════════════════════════════════════════════ -->
+      <section id="view-calls" class="view hidden" role="tabpanel" aria-labelledby="tab-calls">
       <div id="lobby-screen">
         <header class="lobby-header">
           <div class="lobby-title-row">
@@ -117,6 +169,78 @@
           <video id="vd-local-video" class="vd-local-pip" autoplay muted playsinline></video>
         </div>
       </div>
+      </section>
+
+      <!-- ═════ SETTINGS (file sharing; call settings stay in the panel) ═════ -->
+      <section id="view-settings" class="view hidden" role="tabpanel" aria-labelledby="tab-settings">
+        <header class="view-header"><h1>Settings</h1></header>
+        <form id="fs-settings" class="fs-card fs-form" novalidate>
+          <h2>File sharing</h2>
+          <label for="fs-set-name">Display name</label>
+          <input id="fs-set-name" type="text" maxlength="64" autocomplete="off" />
+          <small id="fs-set-name-hint" class="fs-hint"></small>
+
+          <h2>WZP relay (fallback for files)</h2>
+          <label for="fs-set-relay">Relay address</label>
+          <input id="fs-set-relay" type="text" placeholder="host:port (empty = direct only)" autocomplete="off" spellcheck="false" />
+          <label for="fs-set-token">Relay access token</label>
+          <div class="fs-row">
+            <span id="fs-token-state" class="fs-badge"></span>
+            <button id="fs-token-clear" class="fs-secondary small" type="button">Clear token</button>
+          </div>
+          <input id="fs-set-token" type="password" placeholder="Enter a new token to replace it" autocomplete="off" spellcheck="false" />
+          <small class="fs-hint">The token is stored only on this device and never shown again. Without it, files go over direct connections only.</small>
+
+          <h2>iroh relay (contacts &amp; signaling)</h2>
+          <fieldset class="fs-radios">
+            <legend class="sr-only">iroh relay mode</legend>
+            <label><input type="radio" name="fs-iroh" value="n0" /> Public n0 relays (default)</label>
+            <label><input type="radio" name="fs-iroh" value="custom" /> Custom relay</label>
+            <label><input type="radio" name="fs-iroh" value="off" /> Off (LAN / direct only)</label>
+          </fieldset>
+          <input id="fs-set-iroh-url" type="url" placeholder="https://relay.example.org" autocomplete="off" spellcheck="false" />
+
+          <div id="fs-dl-block">
+            <h2>Received files</h2>
+            <label>Download folder</label>
+            <code id="fs-dl-path" class="fs-path"></code>
+            <div class="fs-row">
+              <button id="fs-dl-choose" class="fs-secondary small" type="button">Choose…</button>
+              <button id="fs-dl-reset" class="fs-secondary small" type="button">Use default</button>
+              <button id="fs-dl-open" class="fs-secondary small" type="button">Open</button>
+            </div>
+          </div>
+          <p id="fs-dl-android" class="fs-hint hidden">Received files are saved to Downloads/WarzonePhone.</p>
+
+          <label class="fs-check"><input id="fs-set-auto" type="checkbox" /> Auto-accept files from verified contacts</label>
+
+          <button id="fs-set-save" class="fs-primary" type="submit">Save</button>
+          <div id="fs-set-msg" class="fs-msg" role="status" aria-live="polite"></div>
+        </form>
+        <div class="fs-card">
+          <h2>Calls</h2>
+          <p class="fs-hint">Audio, video, call relays and network diagnostics.</p>
+          <button id="fs-open-call-settings" class="fs-secondary" type="button">Call settings…</button>
+        </div>
+      </section>
+
+      <!-- ═════ Bottom tab bar ═════ -->
+      <nav id="tabbar" class="tabbar" role="tablist" aria-label="Sections">
+        <button id="tab-files" role="tab" data-tab="files" aria-controls="view-files" aria-selected="true"><span aria-hidden="true">&#x1F4C1;</span><span>Files</span><span id="tab-files-badge" class="tab-badge hidden"></span></button>
+        <button id="tab-contacts" role="tab" data-tab="contacts" aria-controls="view-contacts" aria-selected="false" tabindex="-1"><span aria-hidden="true">&#x1F465;</span><span>Contacts</span><span id="tab-contacts-badge" class="tab-badge hidden"></span></button>
+        <button id="tab-calls" role="tab" data-tab="calls" aria-controls="view-calls" aria-selected="false" tabindex="-1"><span aria-hidden="true">&#x1F4DE;</span><span>Calls</span></button>
+        <button id="tab-settings" role="tab" data-tab="settings" aria-controls="view-settings" aria-selected="false" tabindex="-1"><span aria-hidden="true">&#9881;</span><span>Settings</span></button>
+      </nav>
+
+      <!-- ═════ File-sharing dialogs (filled by src/files.ts) ═════ -->
+      <div id="fs-modal" class="fs-modal hidden" role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
+        <div class="fs-modal-card">
+          <h2 id="fs-modal-title"></h2>
+          <div id="fs-modal-body"></div>
+          <div id="fs-modal-actions" class="fs-modal-actions"></div>
+        </div>
+      </div>
+      <div id="fs-toast" class="fs-toast hidden" role="alert"></div>
 
       <!-- ═══════════════════════════════════════════════════════
            USER CONTEXT MENU (tap on user in lobby)
@@ -256,5 +380,6 @@
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/files.ts"></script>
   </body>
 </html>
