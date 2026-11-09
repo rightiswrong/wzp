@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.wzp.plugin.ShareInbox
 
 class MainActivity : TauriActivity() {
   companion object {
@@ -32,6 +33,13 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+
+    // "Share to WarzonePhone" cold start (or activity re-creation): hand the
+    // launch intent to the wzp-android plugin. onNewIntent (app already
+    // running) is forwarded to the plugin by TauriActivity/PluginManager.
+    if (savedInstanceState == null) {
+      ShareInbox.handleIntent(this, intent)
+    }
 
     // Request RECORD_AUDIO early so Oboe (inside libwzp_native.so) can open
     // the AAudio input stream without silently failing. The grant is
