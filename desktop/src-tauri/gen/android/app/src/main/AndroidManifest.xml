@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- FOREGROUND_SERVICE(_DATA_SYNC), POST_NOTIFICATIONS, WRITE_EXTERNAL_STORAGE
+         (maxSdkVersion 28) and the TransferService declaration come from
+         desktop/plugins/tauri-plugin-wzp-android/android/src/main/AndroidManifest.xml
+         via the manifest merger. -->
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -26,6 +30,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <!-- "Share to WarzonePhone": handled by tauri-plugin-wzp-android
+                 (ShareInbox), which copies the content into the app cache. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
 

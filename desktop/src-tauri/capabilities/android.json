@@ -1,0 +1,9 @@
+{
+  "identifier": "android",
+  "description": "Android-only: WarzonePhone Android bridge plugin (file picker, shared files, notification permission).",
+  "windows": ["main"],
+  "platforms": ["android"],
+  "permissions": [
+    "wzp-android:default"
+  ]
+}

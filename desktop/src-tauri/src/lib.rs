@@ -3636,7 +3636,12 @@ pub fn run() {
         })),
     });
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Android bridge: SAF picker, share target, Downloads, transfer service.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_wzp_android::init());
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .manage(state)

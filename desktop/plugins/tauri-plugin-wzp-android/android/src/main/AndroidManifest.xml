@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the app manifest by Gradle's manifest merger. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Transfer foreground service (Android 14+ requires the typed permission). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Runtime permission on Android 13+ (requestNotificationPermission). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Only for saveToDownloads on Android 8.0-9 (API 26-28); API 29+ uses
+         MediaStore.Downloads, which needs no permission. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <application>
+        <service
+            android:name="com.wzp.plugin.TransferService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>
