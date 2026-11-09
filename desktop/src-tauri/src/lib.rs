@@ -826,6 +826,7 @@ async fn connect(
     video_width: Option<u32>,
     video_height: Option<u32>,
 ) -> Result<String, String> {
+    share::refresh_relay_tokens(&app).await;
     let force_direct = direct_only.unwrap_or(false);
     let video_codec = video_codec.unwrap_or_else(|| "h264".to_string());
     let video_width = video_width.unwrap_or(1280);
@@ -1684,6 +1685,7 @@ async fn register_signal(
     app: tauri::AppHandle,
     relay: String,
 ) -> Result<String, String> {
+    share::refresh_relay_tokens(&app).await;
     // Set the desired relay and handle the "already registered to
     // a different relay" transition. This is the public entry
     // point — settings-screen changes come through here.
@@ -1817,6 +1819,9 @@ fn do_register_signal(
                     format!("{e}")
                 })?;
         let transport = Arc::new(wzp_transport::QuinnTransport::new(conn));
+        wzp_client::relay_auth::authenticate(&*transport, addr)
+            .await
+            .map_err(|e| format!("relay auth: {e}"))?;
         emit_call_debug(
             &app,
             "register_signal:quic_connected",

@@ -474,6 +474,7 @@ impl ShareState {
         cfg.relay_token = s.relay_token.clone();
         cfg.auto_accept = false; // handled here (verified contacts only)
         let mut warning = None;
+        wzp_client::relay_auth::set_tokens(&[], None);
         if !s.relay_addr.is_empty() {
             let lookup = tokio::time::timeout(
                 Duration::from_secs(5),
@@ -483,6 +484,9 @@ impl ShareState {
             match lookup {
                 Ok(Ok(addrs)) => {
                     let addrs: Vec<_> = addrs.collect();
+                    // Calls to this relay authenticate with the same token
+                    // (scoped to these addresses only).
+                    wzp_client::relay_auth::set_tokens(&addrs, s.relay_token.as_deref());
                     cfg.relay = addrs
                         .iter()
                         .find(|a| a.is_ipv4())
@@ -1005,6 +1009,31 @@ pub async fn clear_finished(state: St<'_>) -> Result<usize, String> {
         .unwrap()
         .retain(|id, _| live.contains(id));
     Ok(n)
+}
+
+/// Register the Settings relay token for the Settings relay's resolved
+/// addresses (and nothing else) so call connections can authenticate.
+/// Cheap enough to run before every call/signal dial, which avoids racing
+/// the background node restart after a settings change.
+pub async fn refresh_relay_tokens(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<Arc<ShareState>>() else {
+        return;
+    };
+    let s = state.settings();
+    if s.relay_addr.is_empty() || s.relay_token.is_none() {
+        wzp_client::relay_auth::set_tokens(&[], None);
+        return;
+    }
+    let lookup = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::lookup_host(s.relay_addr.clone()),
+    )
+    .await;
+    if let Ok(Ok(addrs)) = lookup {
+        let addrs: Vec<_> = addrs.collect();
+        wzp_client::relay_auth::set_tokens(&addrs, s.relay_token.as_deref());
+    }
 }
 
 #[tauri::command]

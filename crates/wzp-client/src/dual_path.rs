@@ -583,7 +583,11 @@ pub async fn race(
             wzp_transport::connect(&relay_ep_for_fut, relay_addr, &relay_sni, relay_client_cfg)
                 .await
                 .map_err(|e| anyhow::anyhow!("relay dial: {e}"))?;
-        Ok::<_, anyhow::Error>(QuinnTransport::new(conn))
+        let t = QuinnTransport::new(conn);
+        crate::relay_auth::authenticate(&t, relay_addr)
+            .await
+            .map_err(|e| anyhow::anyhow!("relay auth: {e}"))?;
+        Ok::<_, anyhow::Error>(t)
     };
 
     // Phase 6: run both paths concurrently via tokio::spawn and

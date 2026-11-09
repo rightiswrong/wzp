@@ -784,7 +784,9 @@ impl CallEngine {
                 t_ms = call_t0.elapsed().as_millis(),
                 "first-join diag: QUIC connection established, performing handshake"
             );
-            Arc::new(wzp_transport::QuinnTransport::new(conn))
+            let t = Arc::new(wzp_transport::QuinnTransport::new(conn));
+            wzp_client::relay_auth::authenticate(&*t, relay_addr).await?;
+            t
         };
 
         // The media handshake (CallOffer/CallAnswer + crypto key
@@ -2547,7 +2549,9 @@ impl CallEngine {
                     e
                 })?;
             info!("QUIC connection established, performing handshake");
-            Arc::new(wzp_transport::QuinnTransport::new(conn))
+            let t = Arc::new(wzp_transport::QuinnTransport::new(conn));
+            wzp_client::relay_auth::authenticate(&*t, relay_addr).await?;
+            t
         };
 
         // Handshake — relay-specific. Direct P2P connections skip

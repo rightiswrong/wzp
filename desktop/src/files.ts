@@ -946,6 +946,7 @@ async function saveSettings(update: Record<string, unknown>, okMsg = "Saved") {
     settings = await invoke<SettingsView>("set_settings", { update });
     msg.textContent = okMsg;
     msg.className = "fs-msg ok";
+    window.dispatchEvent(new Event("wzp-share-settings-saved"));
     await loadSettings();
     void refreshIdentity();
   } catch (e) {

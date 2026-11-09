@@ -114,6 +114,9 @@ pub async fn probe_reflect_addr(
             .await
             .map_err(|e| format!("connect: {e}"))?;
         let transport = QuinnTransport::new(conn);
+        crate::relay_auth::authenticate(&transport, relay)
+            .await
+            .map_err(|e| format!("relay auth: {e}"))?;
 
         // The relay signal handler waits for a RegisterPresence
         // before entering its main dispatch loop (see

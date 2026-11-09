@@ -149,11 +149,13 @@ interface Settings {
   birthdayAttack: boolean;
 }
 
+const DEAD_RELAYS = ["193.180.213.68:4433"];
+
 function loadSettings(): Settings {
   const defaults: Settings = {
-    relays: [
-      { name: "Default", address: "193.180.213.68:4433" },
-    ],
+    // No built-in relay: calls use the relay from Settings (synced in
+    // syncCallRelayFromShareSettings) or ones the user adds here.
+    relays: [],
     selectedRelay: 0, room: "general", alias: "",
     osAec: true, quality: "auto", videoCodec: "h264", videoResolution: "1280x720", recentRooms: [],
     dredDebugLogs: false, callDebugLogs: false,
@@ -161,7 +163,17 @@ function loadSettings(): Settings {
   };
   try {
     const raw = localStorage.getItem("wzp-settings");
-    if (raw) return { ...defaults, ...JSON.parse(raw) };
+    if (raw) {
+      const s: Settings = { ...defaults, ...JSON.parse(raw) };
+      // Drop the upstream author's relay, which no longer answers.
+      const before = s.relays.length;
+      s.relays = (s.relays || []).filter(r => !DEAD_RELAYS.includes(r.address.trim()));
+      if (s.relays.length !== before) {
+        if (s.selectedRelay >= s.relays.length) s.selectedRelay = 0;
+        localStorage.setItem("wzp-settings", JSON.stringify(s));
+      }
+      return s;
+    }
   } catch {}
   return defaults;
 }
@@ -479,7 +491,7 @@ joinVoiceBtn.addEventListener("click", async () => {
   if (inVoice || connectPending) return;
   const relay = getRelay();
   const s = loadSettings();
-  if (!relay) { showToast("No relay configured"); return; }
+  if (!relay) { showToast("No relay set — add your relay address in Settings"); return; }
   connectPending = true;
   const origText = joinVoiceBtn.textContent;
   joinVoiceBtn.textContent = "Connecting…";
@@ -508,7 +520,7 @@ joinVideoBtn.addEventListener("click", async () => {
   if (inVoice || connectPending) return;
   const relay = getRelay();
   const s = loadSettings();
-  if (!relay) { showToast("No relay configured"); return; }
+  if (!relay) { showToast("No relay set — add your relay address in Settings"); return; }
   connectPending = true;
   const origText = joinVideoBtn.textContent;
   joinVideoBtn.textContent = "Connecting…";
@@ -1193,12 +1205,42 @@ sNatDetectBtn?.addEventListener("click", async () => {
   }
 });
 
+// ── Relay from Settings → call relay list ─────────────────────────
+// The relay address entered in Settings (shared with file transfer) is
+// added to the call relay list and selected if it isn't there yet. The
+// relay token stays in the Rust side and is attached automatically to
+// connections to that address only.
+async function syncCallRelayFromShareSettings(): Promise<boolean> {
+  try {
+    const view: any = await invoke("get_settings");
+    const addr = String(view?.relay_addr || "").trim();
+    if (!addr) return false;
+    const s = loadSettings();
+    const idx = s.relays.findIndex(r => r.address.trim() === addr);
+    if (idx === 0 && s.selectedRelay === 0) return false;
+    if (idx > 0) s.relays.splice(idx, 1);
+    s.relays.unshift({ name: "My relay", address: addr });
+    s.selectedRelay = 0;
+    saveSettings(s);
+    return true;
+  } catch (e) {
+    console.warn("relay sync failed:", e);
+    return false;
+  }
+}
+window.addEventListener("wzp-share-settings-saved", async () => {
+  if (await syncCallRelayFromShareSettings()) {
+    renderRelayList();
+    void autoConnect();
+  }
+});
+
 // ── Auto-connect signal on launch ─────────────────────────────────
 async function autoConnect() {
   const relay = getRelay();
   const s = loadSettings();
   if (!relay) {
-    lobbyRelayLabel.textContent = "No relay configured";
+    lobbyRelayLabel.textContent = "No relay set — add it in Settings";
     lobbyDot.style.background = "var(--red)";
     return;
   }
@@ -1241,4 +1283,4 @@ document.addEventListener("keydown", (e) => {
 });
 
 // Launch
-autoConnect();
+syncCallRelayFromShareSettings().finally(() => autoConnect());

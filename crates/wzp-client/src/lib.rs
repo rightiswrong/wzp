@@ -39,6 +39,7 @@ pub mod metrics;
 pub mod netcheck;
 pub mod portmap;
 pub mod reflect;
+pub mod relay_auth;
 pub mod relay_map;
 pub mod stun;
 pub mod sweep;
